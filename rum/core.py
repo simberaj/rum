@@ -92,11 +92,13 @@ class GridMaker(Task):
     def main(self, gridSize=100):
         with self._connect() as cur:
             qry = sql.SQL('''
-                drop table if exists {schema}.{targetTable};
-                create table {schema}.{targetTable}
-                as select
-                    makegrid(geometry,{gridSize}) as geometry
-                from {schema}.{extentTable}'''
+                DROP TABLE IF EXISTS {schema}.{targetTable};
+                CREATE TABLE {schema}.{targetTable}
+                    AS SELECT
+                        makegrid(geometry,{gridSize}) AS geometry
+                    FROM {schema}.{extentTable};
+                SELECT Populate_Geometry_Columns('{schema}.{targetTable}'::regclass);
+                '''
             ).format(
                 schema=sql.Identifier(self.schema),
                 extentTable=sql.Identifier(EXTENT_TABLE),
