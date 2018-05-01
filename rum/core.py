@@ -71,7 +71,11 @@ class Task:
         
     def run(self, *args, **kwargs):
         self.logger.debug('starting %s', self.logname)
-        self.main(*args, **kwargs)
+        try:
+            self.main(*args, **kwargs)
+        except Exception as exc:
+            self.logger.exception(exc)
+            raise
         self.logger.debug('successfully finished %s', self.logname)
         
     def main(self, *args, **kwargs):
