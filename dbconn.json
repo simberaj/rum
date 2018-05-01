@@ -1,0 +1,7 @@
+{
+    "dbname" : "rum",
+    "host" : "localhost",
+    "port" : 5432,
+    "user" : "postgres",
+    "password" : "bezhesla"
+}
