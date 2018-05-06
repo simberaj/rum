@@ -1,6 +1,6 @@
 import argparse
 
-from .core import Initializer, GridMaker
+from .core import Initializer, GridMaker, ExtentMaker
      
 def defaultArgumentParser(description, schema=True):
     argparser = argparse.ArgumentParser(description=description)

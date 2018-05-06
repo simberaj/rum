@@ -119,12 +119,6 @@ class OSMImporter(Importer):
             
 class OSMExtractor:
     inserter = None
-    TYPES_TO_POSTGRE = {
-        str : 'text',
-        float : 'double precision',
-        bool : 'boolean',
-        int : 'bigint',
-    }
 
     def __init__(self, name, geomtype, listenGeomTypes, selector=None, attributes=[]):
         self.name = name
@@ -157,7 +151,7 @@ class OSMExtractor:
     def getFieldDefs(self):
         fields = collections.OrderedDict()
         for attr in self.attributes:
-            fields[attr.name] = (self.TYPES_TO_POSTGRE[attr.type], None)
+            fields[attr.name] = (core.TYPES_TO_POSTGRE[attr.type], None)
         return fields
 
     @classmethod
@@ -705,6 +699,11 @@ class OSMParser(xml.sax.handler.ContentHandler):
 
   
 class LayerImporter(Importer):
+    SIZELESS_TYPES = {
+        'int' : 'int',
+        'float' : 'double precision'
+    }
+
     def main(self, path, table, encoding=None, sourceSRID=None, targetSRID=None, clipExtent=False, overwrite=False):
         with fiona.drivers():
             with fiona.open(path, encoding=encoding) as source:
@@ -728,7 +727,7 @@ class LayerImporter(Importer):
                     else:
                         featureIterator = source
                     with writer.open(cursor):
-                        selg.logger.debug('starting feature import')
+                        self.logger.debug('starting feature import')
                         for feature in featureIterator:
                             writer.write(feature)
                         
@@ -737,13 +736,13 @@ class LayerImporter(Importer):
         for name, typedef in fieldDict.items():
             typename, typesize = typedef.split(':')
             defsize = None
-            if typename == 'str':
+            if typename in self.SIZELESS_TYPES:
+                posttype = self.SIZELESS_TYPES[typename]
+            elif typename == 'str':
                 posttype = 'varchar'
                 defsize = int(typesize)
-            elif typename == 'int':
-                posttype = 'int'
             else:
-                raise DataImportError('unknown field data type: ' + posttype)
+                raise DataImportError('unknown field data type: ' + typename)
             fdict[name] = (posttype, defsize)
         return fdict
     
@@ -870,8 +869,8 @@ class Writer:
                 self.logger.warning('forced import SRID %d but extent already present with SRID %d, inconsistency will arise', targetSRID, extentSRID)
             else:
                 targetSRID = extentSRID
-        if targetSRID is None:
-            if sourceSRID is None:
+        if not targetSRID:
+            if not self.sourceSRID:
                 raise DataImportError('SRID of input and output undefined')
             else:
                 self.logger.info('import taking over source SRID %d', self.sourceSRID)
@@ -927,18 +926,20 @@ class Writer:
         ).as_string(self.cursor)
     
     def geometryPlaceholder(self):
-        geometryPlaceholder = sql.SQL('ST_GeomFromWKB({})').format(
-            sql.Placeholder('geometry')
+        geometryPlaceholder = sql.SQL(
+            'ST_SetSRID(ST_GeomFromWKB({geom}),{sourceSRID})'
+        ).format(
+            geom=sql.Placeholder('geometry'),
+            sourceSRID=sql.Literal(self.sourceSRID),
         )
         if self.geomtype.lower().startswith('multi'):
             geometryPlaceholder = sql.SQL('ST_Multi({})').format(geometryPlaceholder)
         if self.sourceSRID != self.targetSRID:
             return sql.SQL(
-                'ST_Transform(ST_SetSRID({geom},{sourceSRID}),{targetSRID})'
+                'ST_Transform({geom},{targetSRID})'
             ).format(
                 geom=geometryPlaceholder,
-                sourceSRID=sql.Literal(self.sourceSRID),
-                targetSRID=sql.Literal(self.targetSRID)
+                targetSRID=sql.Literal(self.targetSRID),
             )
         else:
             return geometryPlaceholder

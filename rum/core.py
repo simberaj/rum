@@ -22,6 +22,14 @@ EXTENT_TABLE = 'extent'
 GRID_TABLE = 'grid'
 GEOMETRY_FIELD = 'geometry'
 
+TYPES_TO_POSTGRE = {
+    str : 'text',
+    float : 'double precision',
+    bool : 'boolean',
+    int : 'bigint',
+}
+
+
 class Error(Exception):
     pass
     
@@ -106,7 +114,26 @@ class Initializer(DatabaseTask):
                 .format(sql.Identifier(self.schema)).as_string(cur)
             )
 
-
+class ExtentMaker(DatabaseTask):
+    def main(self, table, overwrite=False):
+        with self._connect() as cur:
+            if overwrite:
+                self.logger.debug('dropping previous extent')
+                delqry = sql.SQL('''DROP TABLE IF EXISTS {schema}.extent''').format(
+                    schema=sql.Identifier(self.schema),
+                ).as_string(cur)
+                cur.execute(delqry)
+            qry = sql.SQL(
+                '''CREATE TABLE {schema}.extent AS SELECT
+                ST_Union(geometry) as geometry
+                FROM {schema}.{table}'''
+            ).format(
+                schema=sql.Identifier(self.schema),
+                table=sql.Identifier(table)
+            ).as_string(cur)
+            self.logger.debug('creating extent: %s', qry)
+            cur.execute(qry)
+            
 class GridMaker(DatabaseTask):
     def main(self, gridSize=100):
         with self._connect() as cur:
