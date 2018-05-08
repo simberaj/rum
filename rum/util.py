@@ -74,7 +74,8 @@ class ShapeCalculator(core.DatabaseTask):
         ('area', 'ST_Area(geometry)'),
         ('perim_index', 'ST_Perimeter(geometry) / (3.5449077 * sqrt(ST_Area(geometry)))'),
         ('fullness_index', 'ST_Area(ST_Buffer(geometry,0.177245385 * sqrt(ST_Area(geometry)))) / ST_Area(geometry)'),
-        ('convexity_index', 'ST_Area(geometry) / ST_Area(ST_ConvexHull(geometry))'),
+        ('depth_index', 'ST_Area(ST_Buffer(geometry,-0.177245385 * sqrt(ST_Area(geometry)))) / ST_Area(geometry)'),
+        ('concavity_index', '1 - (ST_Area(geometry) / ST_Area(ST_ConvexHull(geometry)))'),
     ]
     createSQL = 'ALTER TABLE {schema}.{table} ADD COLUMN {ifnex} {colname} double precision;'
     computeSQL = 'UPDATE {schema}.{table} SET {colname}={expression};'
