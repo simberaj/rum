@@ -6,6 +6,7 @@ from . import core
 
 class Calculator(core.DatabaseTask):
     targetType = 'double precision'
+    denullify = None
 
     @classmethod
     def create(cls, code, args):
@@ -23,7 +24,10 @@ class Calculator(core.DatabaseTask):
         if sourceField:
             baseTargetField += ('_' + sourceField)
         with self._connect() as cur:
-            for specifier in self.getSpecifiers(cur, table, sourceField):
+            specifiers = self.getSpecifiers(cur, table, sourceField)
+            if len(specifiers) > 1:
+                self.logger.info('found %d subfields', len(specifiers))
+            for specifier in specifiers:
                 targetField = baseTargetField
                 if specifier:
                     targetField += '_' + str(specifier)
@@ -38,13 +42,14 @@ class Calculator(core.DatabaseTask):
                 ).as_string(cur)
                 self.logger.debug('computing field: %s', qry)
                 cur.execute(qry)
-                zeroqry = sql.SQL('''UPDATE {schema}.grid SET {targetField} = 0
-                    WHERE {targetField} IS NULL''').format(
-                    schema=self.schemaSQL,
-                    targetField=targetFieldSQL,
-                ).as_string(cur)
-                self.logger.debug('denulling field: %s', zeroqry)
-                cur.execute(zeroqry)
+                if self.denullify:
+                    zeroqry = sql.SQL('''UPDATE {schema}.grid SET {targetField} = 0
+                        WHERE {targetField} IS NULL''').format(
+                        schema=self.schemaSQL,
+                        targetField=targetFieldSQL,
+                    ).as_string(cur)
+                    self.logger.debug('denulling field: %s', zeroqry)
+                    cur.execute(zeroqry)
 
     def getSpecifiers(self, cur, table, sourceField):
         return [None]
@@ -63,6 +68,8 @@ class Calculator(core.DatabaseTask):
         raise NotImplementedError
         
 class CategorizableCalculator(Calculator):
+    denullify = True
+
     def getSpecifiers(self, cur, table, sourceField=None):
         if sourceField:
             uniqueQry = sql.SQL('SELECT DISTINCT {sourceField} FROM {schema}.{table}').format(
@@ -72,7 +79,7 @@ class CategorizableCalculator(Calculator):
             ).as_string(cur)
             self.logger.debug('retrieving unique values: %s', uniqueQry)
             cur.execute(uniqueQry)
-            return [row[0] for row in cur.fetchall()]
+            return list(sorted(row[0] for row in cur.fetchall() if row[0] is not None))
         else:
             return [None]
         
@@ -110,9 +117,39 @@ class DensityCalculator(CategorizableCalculator):
             {schema}.grid.geometry,
             {schema}.{table}.geometry
         )'''
-            
+           
+class AverageCalculator(Calculator):
+    code = 'avg'
+    denullify = False
+    template = '''SELECT sum({schema}.{table}.{sourceField}) / count(1)
+        FROM {schema}.{table}
+        WHERE ST_Intersects(
+            {schema}.grid.geometry,
+            {schema}.{table}.geometry
+        )'''
+    
+    def query(self, cur, table, sourceField, specifier=None):
+        return sql.SQL(self.template).format(
+            schema=self.schemaSQL,
+            table=sql.Identifier(table),
+            sourceField=sql.Identifier(sourceField)
+        )
+        
+class WeightedAverageCalculator(AverageCalculator):
+    code = 'wavg'
+    template = '''SELECT sum(
+            {schema}.{table}.{sourceField} * ST_Area({schema}.{table}.geometry)
+        ) / sum(ST_Area({schema}.{table}.geometry))
+        FROM {schema}.{table}
+        WHERE ST_Intersects(
+            {schema}.grid.geometry,
+            {schema}.{table}.geometry
+        )'''
+    
         
 Calculator.CODES = {calc.code : calc for calc in [
     CoverageCalculator,
     DensityCalculator,
+    AverageCalculator,
+    WeightedAverageCalculator,
 ]}

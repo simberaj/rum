@@ -10,8 +10,8 @@ in the grid table.
 argparser = rum.defaultArgumentParser(DESCRIPTION)
 argparser.add_argument('table', help='calculation source table name')
 argparser.add_argument('method', help='calculation method')
-argparser.add_argument('-c', '--categorize', metavar='field',
-    help='categorize the input features by this attribute')
+argparser.add_argument('-f', '--field', metavar='name',
+    help='use this field from the source table in calculations')
 argparser.add_argument('-o', '--overwrite', action='store_true',
     help='overwrite existing attributes'
 )
@@ -19,5 +19,5 @@ argparser.add_argument('-o', '--overwrite', action='store_true',
 if __name__ == '__main__':
     args = argparser.parse_args()
     rum.calculate.Calculator.create(args.method, args).run(
-        args.table, args.categorize, args.overwrite
+        args.table, args.field, args.overwrite
     )
