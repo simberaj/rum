@@ -38,7 +38,7 @@ class Importer(core.DatabaseTask):
             )
             SELECT ST_XMin(b), ST_YMin(b), ST_XMax(b), ST_YMax(b) FROM bbox;'''
         ).format(
-            schema=sql.Identifier(self.schema),
+            schema=self.schemaSQL,
             geomField=sql.Identifier(core.GEOMETRY_FIELD),
             srid=sql.Literal(srid)
         ).as_string(cur)
@@ -101,13 +101,17 @@ class OSMImporter(Importer):
                     extractContext.enter_context(e.open(cur))
                 self.logger.info('parsing %s', path)
                 for feature in OSMParser().parse(path, isTmpDB=isTmpDB, isBZ2=isBZ2):
-                    geom = feature['geometry']
-                    geomtype = geom['type']
-                    geom = shapely.geometry.shape(geom)
-                    if not acceptor or acceptor(geom):
-                        feature['geometry'] = geom
-                        for e in self.listeners[geomtype]:
-                            e.process(feature)
+                    try:
+                        geom = feature['geometry']
+                        geomtype = geom['type']
+                        geom = shapely.geometry.shape(geom)
+                        if not acceptor or acceptor(geom):
+                            feature['geometry'] = geom
+                            for e in self.listeners[geomtype]:
+                                e.process(feature)
+                    except:
+                        self.logger.debug('failed at %s', str(feature))
+                        raise
                             
     def createExtentAcceptor(self, cur):
         self.logger.info('clipping input by analysis extent')
@@ -541,7 +545,7 @@ class OSMParser(xml.sax.handler.ContentHandler):
             if len(coors) > 3:
                 cls.setWinding(coors, False)
                 return {'type' : 'Polygon', 'coordinates' : [coors]}
-        else:
+        elif len(coors) > 1:
             return {'type' : 'LineString', 'coordinates' : coors}
     
     @staticmethod
@@ -611,8 +615,8 @@ class OSMParser(xml.sax.handler.ContentHandler):
     def noderefsToLine(wayrefs, nodes):
         return [nodes[ref] for ref in wayrefs]
     
-    @staticmethod
-    def matchHoles(outer, inner): # match inner to outer rings
+    @classmethod
+    def matchHoles(cls, outer, inner): # match inner to outer rings
         if len(outer) == 1:
             return [inner]
         else:
@@ -776,6 +780,7 @@ class Writer:
     
     def __init__(self, schema, table, fields, geomtype, sourceSRID=None, targetSRID=None, overwrite=False):
         self.schema = schema
+        self.schemaSQL = sql.Identifier(self.schema)
         self.table = table
         self.tablepath = '{}.{}'.format(self.schema, self.table)
         self.fields = fields
@@ -816,7 +821,7 @@ class Writer:
     
     def createTable(self):
         tabledef = sql.SQL('{schema}.{table}').format(
-            schema=sql.Identifier(self.schema), table=sql.Identifier(self.table)
+            schema=self.schemaSQL, table=sql.Identifier(self.table)
         )
         if self.overwrite:
             delqry = sql.SQL('''DROP TABLE IF EXISTS {tabledef}''').format(tabledef=tabledef)
@@ -855,7 +860,7 @@ class Writer:
             ON {schema}.{table} USING GIST ({geomcol});
         ''').format(
             indexname=sql.Identifier(indexName),
-            schema=sql.Identifier(self.schema),
+            schema=self.schemaSQL,
             table=sql.Identifier(self.table),
             geomcol=sql.Identifier(core.GEOMETRY_FIELD),
         ).as_string(self.cursor)
@@ -913,7 +918,7 @@ class Writer:
             INSERT INTO {schema}.{table}({fields})
             VALUES ({values})
         ''').format(
-            schema=sql.Identifier(self.schema),
+            schema=self.schemaSQL,
             table=sql.Identifier(self.table),
             fields=sql.SQL(', ').join(
                 [sql.Identifier(fld) for fld in fieldnames] + 

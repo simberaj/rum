@@ -26,7 +26,7 @@ TYPES_TO_POSTGRE = {
     str : 'text',
     float : 'double precision',
     bool : 'boolean',
-    int : 'bigint',
+    int : 'integer',
 }
 
 
@@ -36,12 +36,16 @@ class Error(Exception):
 class ConfigError(Error):
     pass
 
+class InvalidParameterError(Error):
+    pass
+
 
 class Task:
     DEFAULT_CONF_PATH = None
 
     def __init__(self, schema=None):
         self.schema = schema if schema else 'rum'
+        self.schemaSQL = sql.Identifier(self.schema)
         self._startLogging()
     
     def _startLogging(self):
@@ -111,7 +115,7 @@ class Initializer(DatabaseTask):
                     self.logger.debug('initialization query: %s', query)
                     cur.execute(query)
             cur.execute(sql.SQL('CREATE SCHEMA IF NOT EXISTS {}')
-                .format(sql.Identifier(self.schema)).as_string(cur)
+                .format(self.schemaSQL).as_string(cur)
             )
 
 class ExtentMaker(DatabaseTask):
@@ -120,7 +124,7 @@ class ExtentMaker(DatabaseTask):
             if overwrite:
                 self.logger.debug('dropping previous extent')
                 delqry = sql.SQL('''DROP TABLE IF EXISTS {schema}.extent''').format(
-                    schema=sql.Identifier(self.schema),
+                    schema=self.schemaSQL,
                 ).as_string(cur)
                 cur.execute(delqry)
             qry = sql.SQL(
@@ -128,11 +132,17 @@ class ExtentMaker(DatabaseTask):
                 ST_Union(geometry) as geometry
                 FROM {schema}.{table}'''
             ).format(
-                schema=sql.Identifier(self.schema),
+                schema=self.schemaSQL,
                 table=sql.Identifier(table)
             ).as_string(cur)
             self.logger.debug('creating extent: %s', qry)
             cur.execute(qry)
+            popqry = sql.SQL('''SELECT Populate_Geometry_Columns(
+                '{schema}.extent'::regclass
+            );''').format(schema=self.schemaSQL).as_string(cur)
+            self.logger.debug('registering extent geometry: %s', popqry)
+            cur.execute(popqry)
+
             
 class GridMaker(DatabaseTask):
     def main(self, gridSize=100):
@@ -146,7 +156,7 @@ class GridMaker(DatabaseTask):
                 SELECT Populate_Geometry_Columns('{schema}.{targetTable}'::regclass);
                 '''
             ).format(
-                schema=sql.Identifier(self.schema),
+                schema=self.schemaSQL,
                 extentTable=sql.Identifier(EXTENT_TABLE),
                 targetTable=sql.Identifier(GRID_TABLE),
                 gridSize=sql.Literal(gridSize),
