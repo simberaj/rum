@@ -147,20 +147,27 @@ class ExtentMaker(DatabaseTask):
 class GridMaker(DatabaseTask):
     def main(self, gridSize=100):
         with self._connect() as cur:
+            indexName = '{}_grid_gix'.format(self.schema)
             qry = sql.SQL('''
-                DROP TABLE IF EXISTS {schema}.{targetTable};
-                CREATE TABLE {schema}.{targetTable}
-                    AS SELECT
-                        makegrid({geomField},{gridSize}) AS {geomField}
-                    FROM {schema}.{extentTable};
-                SELECT Populate_Geometry_Columns('{schema}.{targetTable}'::regclass);
+                DROP TABLE IF EXISTS {schema}.grid;
+                CREATE TABLE {schema}.grid
+                    AS (WITH rawgrid AS 
+                        (SELECT 
+                            makegrid(geometry,{gridSize}) AS geometry
+                            FROM {schema}.extent
+                        )
+                        SELECT 
+                            g.geometry,
+                            ST_Within(g.geometry,e.geometry) as inside
+                        FROM {schema}.extent e, rawgrid g
+                    );
+                SELECT Populate_Geometry_Columns('{schema}.grid'::regclass);
+                CREATE INDEX {indexName} ON {schema}.grid USING GIST (geometry);
                 '''
             ).format(
                 schema=self.schemaSQL,
-                extentTable=sql.Identifier(EXTENT_TABLE),
-                targetTable=sql.Identifier(GRID_TABLE),
+                indexName=sql.Identifier(indexName),
                 gridSize=sql.Literal(gridSize),
-                geomField=sql.Identifier(GEOMETRY_FIELD),
             ).as_string(cur)
             self.logger.debug('grid create query: %s', qry)
             cur.execute(qry)
