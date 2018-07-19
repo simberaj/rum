@@ -9,56 +9,49 @@ from . import core
 
 
 class Calculator(core.DatabaseTask):
-    targetType = 'double precision'
+    # targetType = 'double precision'
     denullify = None
-    BASE_TEMPLATE = '''UPDATE {{schema}}.grid SET {{targetField}} = (
-        SELECT {expression}
-        FROM {{schema}}.{{table}}
-        WHERE ST_Intersects(
-            {{schema}}.grid.geometry,
-            {{schema}}.{{table}}.geometry
-        ){where}
-    )'''
-
-    def calculateField(self, cur, table, targetField, sourceField=None, overwrite=False, **kwargs):
-        targetFieldSQL = sql.Identifier(targetField)
-        self.logger.info('computing grid field %s', targetField)
-        self.createField(cur, targetField, overwrite=overwrite)
-        expression = self.expression(cur, table, sourceField, **kwargs)
-        where = self.where(cur, table, sourceField, **kwargs)
-        template = sql.SQL(
-            sql.SQL(self.BASE_TEMPLATE).format(
-                expression=expression,
-                where=(sql.SQL(' AND ') + where if where else sql.SQL(''))
-            ).as_string(cur)
+    BASE_LEAD = '''CREATE TABLE {schema}.{target} AS SELECT '''
+    BASE_TRAIL = '''FROM {schema}.grid LEFT JOIN {schema}.{table}
+        ON ST_Intersects(
+            {schema}.grid.geometry,
+            {schema}.{table}.geometry
         )
-        qry = template.format(
+        GROUP BY {schema}.grid.geometry'''
+    
+    def calculate(self, cur, table, expression, calc=None, overwrite=False):
+        target = 'grid_{type}_{table}'.format(
+            type=self.type,
+            table=table
+        )
+        if calc: target += ('_' + calc)
+        self.logger.info('computing table %s from table %s', target, table)
+        target = sql.Identifier(target)
+        if overwrite:
+            dropqry = sql.SQL('DROP TABLE IF EXISTS {schema}.{target}').format(
+                schema=self.schemaSQL, target=target
+            ).as_string(cur)
+            self.logger.debug('overwriting: %s', dropqry)
+            cur.execute(dropqry)
+        template = (sql.SQL(self.BASE_LEAD) + expression + sql.SQL(self.BASE_TRAIL)).as_string(cur)
+        qry = sql.SQL(template).format(
             schema=self.schemaSQL,
             table=sql.Identifier(table),
-            sourceField=(sql.Identifier(sourceField) if sourceField else None),
-            targetField=targetFieldSQL,
+            target=target
         ).as_string(cur)
-        self.logger.debug('computing field: %s', qry)
+        self.logger.debug('computing table: %s', qry)
         cur.execute(qry)
-        if self.denullify:
-            zeroqry = sql.SQL('''UPDATE {schema}.grid SET {targetField} = 0
-                WHERE {targetField} IS NULL''').format(
-                schema=self.schemaSQL,
-                targetField=targetFieldSQL,
-            ).as_string(cur)
-            self.logger.debug('denulling field: %s', zeroqry)
-            cur.execute(zeroqry)
+        # if self.denullify:
+            # zeroqry = sql.SQL('''UPDATE {schema}.grid SET {targetField} = 0
+                # WHERE {targetField} IS NULL''').format(
+                # schema=self.schemaSQL,
+                # targetField=targetFieldSQL,
+            # ).as_string(cur)
+            # self.logger.debug('denulling field: %s', zeroqry)
+            # cur.execute(zeroqry)
                 
     def createField(self, cur, targetField, overwrite=False):
         self.createFields(cur, [targetField], overwrite=overwrite)
-        # creator = sql.SQL('ALTER TABLE {schema}.grid ADD {ifnex}{colname} {coltype}').format(
-            # schema=self.schemaSQL,
-            # ifnex=sql.SQL('IF NOT EXISTS ' if overwrite else ''),
-            # colname=sql.Identifier(targetField),
-            # coltype=sql.SQL(self.targetType),
-        # ).as_string(cur)
-        # self.logger.debug('creating field: %s', creator)
-        # cur.execute(creator)
     
     def expression(self, *args, **kwargs):
         raise NotImplementedError
@@ -78,6 +71,8 @@ class Calculator(core.DatabaseTask):
         
         
 class FeatureCalculator(Calculator):
+    type = 'f'
+
     def getSpecifiers(self, cur, table, sourceField):
         return [None]
                 
@@ -91,30 +86,38 @@ class FeatureCalculator(Calculator):
             ))
         
     def main(self, table, sourceField=None, overwrite=False):
-        baseTargetField = 'f_{table}_{method}'.format(
-            table=table, method=self.code
-        )
+        calc = self.code
         if sourceField:
-            baseTargetField += ('_' + sourceField)
+            calc += ('_' + sourceField)
         with self._connect() as cur:
             specifiers = self.getSpecifiers(cur, table, sourceField)
             if len(specifiers) > 1:
                 self.logger.info('found %d subfields', len(specifiers))
-        for specifier in specifiers:
-            with self._connect() as cur:
-                targetField = baseTargetField
-                if specifier:
-                    targetField += '_' + str(specifier)
-                self.calculateField(
-                    cur, table, targetField,
-                    sourceField=sourceField,
-                    overwrite=overwrite,
-                    specifier=specifier
-                )
-            self.vacuumGrid()
+            expression = sql.SQL(', ').join(
+                self.expression(cur, sourceField, specifier)
+                for specifier in specifiers
+            )
+            self.calculate(cur, table, expression, calc=calc, overwrite=overwrite)
     
-    def expression(self, *litter, **garbage):
-        return sql.SQL(self.expressionTemplate)
+    def expression(self, cur, sourceField=None, specifier=None):
+        definer = ''
+        fname = 'val'
+        if sourceField is not None:
+            fname = sourceField
+            if specifier is not None:
+                definer = ''' * (CASE WHEN 
+                    {{schema}}.{{table}}.{sourceField} = {specifier}
+                    THEN 1 ELSE 0 END)'''
+                fname += '_' + str(specifier)
+        return sql.SQL(
+            sql.SQL(self.expressionTemplate).format(
+                definer=sql.SQL(definer)
+            ).as_string(cur)
+        ).format(
+            sourceField=sql.Identifier(sourceField),
+            specifier=sql.Literal(specifier),
+        ) + sql.SQL(' AS ') + sql.Identifier(fname)
+        
     
                
 class CategorizableCalculator(FeatureCalculator):
@@ -122,7 +125,9 @@ class CategorizableCalculator(FeatureCalculator):
 
     def getSpecifiers(self, cur, table, sourceField=None):
         if sourceField:
-            uniqueQry = sql.SQL('SELECT DISTINCT {sourceField} FROM {schema}.{table}').format(
+            uniqueQry = sql.SQL(
+                'SELECT DISTINCT {sourceField} FROM {schema}.{table}'
+            ).format(
                 schema=self.schemaSQL,
                 table=sql.Identifier(table),
                 sourceField=sql.Identifier(sourceField)
@@ -133,44 +138,37 @@ class CategorizableCalculator(FeatureCalculator):
         else:
             return [None]
         
-    def where(self, cur, table, sourceField=None, specifier=None):
-        if sourceField:
-            return sql.SQL('{{schema}}.{{table}}.{{sourceField}}={specifier}').format(
-                specifier=sql.Literal(specifier)
-            )
-        else:
-            return None
-        
         
 class CoverageCalculator(CategorizableCalculator):
     code = 'cov'
     expressionTemplate = '''sum(ST_Area(ST_Intersection(
-            {schema}.grid.geometry, {schema}.{table}.geometry
-        ))) / ST_Area({schema}.grid.geometry)
+            {{{{schema}}}}.grid.geometry, {{{{schema}}}}.{{{{table}}}}.geometry
+        )){definer}) / ST_Area({{{{schema}}}}.grid.geometry)
     '''
     
 class DensityCalculator(CategorizableCalculator):
     code = 'dens'
-    expressionTemplate = 'sum(1) / ST_Area({schema}.grid.geometry)'
+    expressionTemplate = 'sum(1){definer} / ST_Area({{{{schema}}}}.grid.geometry)'
            
 class LengthCalculator(CategorizableCalculator):
     code = 'len'
     expressionTemplate = '''sum(ST_Length(ST_Intersection(
-        {schema}.grid.geometry, {schema}.{table}.geometry
-    ))) / ST_Area({schema}.grid.geometry)
+        {{{{schema}}}}.grid.geometry, {{{{schema}}}}.{{{{table}}}}.geometry
+    )){definer}) / ST_Area({{{{schema}}}}.grid.geometry)
     '''
        
        
 class AverageCalculator(FeatureCalculator):
     code = 'avg'
     denullify = False
-    expressionTemplate = 'sum({schema}.{table}.{sourceField}) / count(1)'
+    expressionTemplate = 'sum({{{{schema}}}}.{{{{table}}}}.{{sourceField}}){definer} / count(1)'
             
 class WeightedAverageCalculator(AverageCalculator):
     code = 'wavg'
     expressionTemplate = '''sum(
-            {schema}.{table}.{sourceField} * ST_Area({schema}.{table}.geometry)
-        ) / sum(ST_Area({schema}.{table}.geometry))
+            {{{{schema}}}}.{{{{table}}}}.{{sourceField}}
+            * ST_Area({{{{schema}}}}.{{{{table}}}}.geometry){definer}
+        ) / sum(ST_Area({{{{schema}}}}.{{{{table}}}}.geometry))
     '''
         
 FeatureCalculator.CODES = {calc.code : calc for calc in [
@@ -183,37 +181,40 @@ FeatureCalculator.CODES = {calc.code : calc for calc in [
 
 
 class TargetCalculator(Calculator):
+    type = 't'
     TEMPLATES = {
-        ('POINT', False) : 'sum({sourceField}) / ST_Area({schema}.grid.geometry)',
+        ('POINT', False) : 'sum({sourceField}) / ST_Area({{schema}}.grid.geometry)',
         ('POINT', True) : 'avg({sourceField})',
         ('POLYGON', False) : '''sum({sourceField}
-            * ST_Area(ST_Intersection({schema}.grid.geometry, {schema}.{table}.geometry))
-            / ST_Area({schema}.{table}.geometry)
+            * ST_Area(ST_Intersection({{schema}}.grid.geometry, {{schema}}.{{table}}.geometry))
+            / ST_Area({{schema}}.{{table}}.geometry)
         )''',
         ('POLYGON', True) : '''sum(
             {sourceField} * ST_Area(ST_Intersection(
-                {schema}.grid.geometry, {schema}.{table}.geometry
+                {{schema}}.grid.geometry, {{schema}}.{{table}}.geometry
             ))
         ) / sum(ST_Area(ST_Intersection(
-            {schema}.grid.geometry, {schema}.{table}.geometry
+            {{schema}}.grid.geometry, {{schema}}.{{table}}.geometry
             ))
         )''',
     }
     
-    def main(self, table, sourceField, targetField, relative=False, overwrite=False):
+    def main(self, table, sourceField, relative=False, overwrite=False):
         with self._connect() as cur:
-            self.calculateField(
-                cur, table, targetField,
-                sourceField=sourceField,
-                overwrite=overwrite,
-                relative=relative
+            self.calculate(cur, table,
+                expression=self.expression(table, sourceField, relative),
+                overwrite=overwrite
             )
             
     def expression(self, cur, table, sourceField, relative=False, **garbage):
-        return sql.SQL(self.TEMPLATES[self.getCalculationMode(cur, table, relative)])
+        return sql.SQL(
+            self.TEMPLATES[self.getGeometryType(cur, table), relative]
+        ).format(
+            sourceField=sql.Identifier(sourceField)
+        ) + sql.SQL(' AS target')
 
         
-    def getCalculationMode(self, cur, table, relative=False):
+    def getGeometryType(self, cur, table):
         qry = sql.SQL('''SELECT type FROM geometry_columns
             WHERE f_table_schema={schema}
                 AND f_table_name={table}
@@ -229,7 +230,7 @@ class TargetCalculator(Calculator):
         geomtype = row[0].upper()
         if geomtype.startswith('MULTI'):
             geomtype = geomtype[5:]
-        return (geomtype, relative)
+        return geomtype
 
         
 class NeighbourhoodCalculator(Calculator):
