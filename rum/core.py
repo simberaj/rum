@@ -1,8 +1,10 @@
 import sys
 import os
 import logging
+import logging.handlers
 import contextlib
 import json
+import uuid
 
 import psycopg2
 from psycopg2 import sql
@@ -29,6 +31,9 @@ TYPES_TO_POSTGRE = {
     int : 'integer',
 }
 
+def tmpName():
+    return uuid.uuid4().hex
+
 
 class Error(Exception):
     pass
@@ -39,9 +44,12 @@ class ConfigError(Error):
 class InvalidParameterError(Error):
     pass
 
+class InvalidContentsError(Error):
+    pass
 
 class Task:
     DEFAULT_CONF_PATH = None
+    activeLoggers = []
 
     def __init__(self, schema=None):
         self.schema = schema if schema else 'rum'
@@ -53,16 +61,22 @@ class Task:
         if self.schema:
             self.logname += ('.' + self.schema)
         self.logger = logging.getLogger(self.logname)
-        self.logger.setLevel(logging.DEBUG)
-        fileHandler = logging.FileHandler(os.path.join(LOG_PATH, self.logname + '.log'))
-        fileHandler.setLevel(logging.DEBUG)
-        stdoutHandler = logging.StreamHandler(sys.stdout)
-        stdoutHandler.setLevel(logging.INFO)
-        formatter = logging.Formatter('%(asctime)s %(levelname)s %(name)s: %(message)s')
-        for handler in (fileHandler, stdoutHandler):
-            handler.setFormatter(formatter)
-            self.logger.addHandler(handler)
-        self.logger.debug('logging started')
+        if self.logger not in self.activeLoggers:
+            self.logger.setLevel(logging.DEBUG)
+            fileHandler = logging.handlers.RotatingFileHandler(
+                os.path.join(LOG_PATH, self.logname + '.log'),
+                maxBytes=10000000,
+                backupCount=3
+            )
+            fileHandler.setLevel(logging.DEBUG)
+            stdoutHandler = logging.StreamHandler(sys.stdout)
+            stdoutHandler.setLevel(logging.INFO)
+            formatter = logging.Formatter('%(asctime)s %(levelname)s %(name)s: %(message)s')
+            for handler in (fileHandler, stdoutHandler):
+                handler.setFormatter(formatter)
+                self.logger.addHandler(handler)
+            self.activeLoggers.append(self.logger)
+            self.logger.debug('logging started')
 
         
     @classmethod
@@ -89,8 +103,8 @@ class DatabaseTask(Task):
         self.connector.logTo(self.logger)
         
     @contextlib.contextmanager
-    def _connect(self):
-        with self.connector as cursor:
+    def _connect(self, autocommit=False):
+        with self.connector.connect(autocommit=autocommit) as cursor:
             yield cursor
             
     @classmethod
@@ -103,6 +117,25 @@ class DatabaseTask(Task):
     @classmethod
     def fromConfig(cls, connConfig, schema):
         return cls(Connector.fromConfig(connConfig), schema=schema)
+    
+    def getGridNames(self, cur, where=None):
+        qry = sql.SQL('''
+            SELECT column_name FROM information_schema.columns
+            WHERE table_schema={schema} AND table_name='grid'
+            {where}
+            ORDER BY ordinal_position;
+        ''').format(
+            schema=sql.Literal(self.schema),
+            where=(where if where else sql.SQL('')),
+        ).as_string(cur)
+        self.logger.debug('selecting grid columns: %s', qry)
+        cur.execute(qry)
+        return [row[0] for row in cur.fetchall()]
+        
+    def getGridFeatureNames(self, cur):
+        return self.getGridNames(cur, 
+            where=sql.SQL("AND (column_name LIKE 'f\_%' OR column_name LIKE 'f_\_%')"),
+        )
    
    
 class Initializer(DatabaseTask):
@@ -145,26 +178,33 @@ class ExtentMaker(DatabaseTask):
 
             
 class GridMaker(DatabaseTask):
-    def main(self, gridSize=100):
+    createPattern = sql.SQL('''
+        CREATE TABLE {schema}.grid
+            AS (WITH rawgrid AS 
+                (SELECT 
+                    makegrid(geometry,{gridSize}) AS geometry
+                    FROM {schema}.extent
+                )
+                SELECT 
+                    g.geometry,
+                    ST_Within(g.geometry,e.geometry) as inside,
+                    reverse(ST_GeoHash(
+                        ST_Transform(ST_Centroid(g.geometry),4326)
+                    )) as geohash
+                FROM {schema}.extent e, rawgrid g
+            );
+        SELECT Populate_Geometry_Columns('{schema}.grid'::regclass);
+        CREATE INDEX {indexName} ON {schema}.grid USING GIST (geometry);
+    ''')
+    
+    def main(self, gridSize=100, overwrite=False):
         with self._connect() as cur:
             indexName = '{}_grid_gix'.format(self.schema)
-            qry = sql.SQL('''
-                DROP TABLE IF EXISTS {schema}.grid;
-                CREATE TABLE {schema}.grid
-                    AS (WITH rawgrid AS 
-                        (SELECT 
-                            makegrid(geometry,{gridSize}) AS geometry
-                            FROM {schema}.extent
-                        )
-                        SELECT 
-                            g.geometry,
-                            ST_Within(g.geometry,e.geometry) as inside
-                        FROM {schema}.extent e, rawgrid g
-                    );
-                SELECT Populate_Geometry_Columns('{schema}.grid'::regclass);
-                CREATE INDEX {indexName} ON {schema}.grid USING GIST (geometry);
-                '''
-            ).format(
+            if overwrite:
+                dropQry = sql.SQL('DROP TABLE IF EXISTS {}.grid').format(self.schemaSQL)
+                self.logger.debug('dropping grid: %s', dropQry)
+                cur.execute(dropQry)
+            qry = self.createPattern.format(
                 schema=self.schemaSQL,
                 indexName=sql.Identifier(indexName),
                 gridSize=sql.Literal(gridSize),
@@ -178,6 +218,9 @@ class Connector:
         self.config = config
         self.logger = EmptyLogger()
     
+    def copy(self):
+        return self.__class__(self.config.copy())
+    
     def logTo(self, logger):
         self.logger = logger
         
@@ -189,17 +232,23 @@ class Connector:
             config = loadConfig(config)
         return cls(config)
     
-    def __enter__(self):
+    @contextlib.contextmanager
+    def connect(self, autocommit=False):
         self.logger.debug('connecting to database %s', self.config.get('dbname'))
         self.connection = psycopg2.connect(**self.config)
-        self.logger.debug('entering database transaction')
-        return self.connection.cursor()
+        if autocommit:
+            self.connection.autocommit = True
+        else:
+            self.logger.debug('entering database transaction')
+        try:
+            yield self.connection.cursor()
+        except:
+            raise
+        else:
+            if not autocommit:
+                self.logger.debug('committing database transaction')
+                self.connection.commit()
     
-    def __exit__(self, exctype, *args):
-        if not exctype:
-            self.logger.debug('committing database transaction')
-            self.connection.commit()
-
             
 class EmptyLogger:
     def __bool__(self):

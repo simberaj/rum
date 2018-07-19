@@ -1,0 +1,53 @@
+{
+    "tasks" : [
+        {
+            "table" : "urbanatlas",
+            "method" : "cov",
+            "field" : "lucat"
+        },
+        {
+            "table" : "building",
+            "method" : "cov"
+        },
+        {
+            "table" : "building",
+            "method" : "wavg",
+            "field" : "perim_index"
+        },
+        {
+            "table" : "building",
+            "method" : "wavg",
+            "field" : "fullness_index"
+        },
+        {
+            "table" : "building",
+            "method" : "wavg",
+            "field" : "depth_index"
+        },
+        {
+            "table" : "building",
+            "method" : "wavg",
+            "field" : "concavity_index"
+        },
+        {
+            "table" : "building",
+            "method" : "wavg",
+            "field" : "detour_index"
+        },
+        {
+            "table" : "building",
+            "method" : "avg",
+            "field" : "area"
+        },
+        {
+            "table" : "transport",
+            "method" : "len",
+            "field" : "class"
+        },
+        {
+            "table" : "poi",
+            "method" : "dens",
+            "field" : "type"
+        }
+    ]
+}

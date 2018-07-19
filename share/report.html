@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf8">
+  <title>Validation result</title>
+  <style type="text/css">
+    body {font-family: "Lucida Sans Unicode", "Lucida Grande", sans-serif; font-size: 11px;}
+    h1 {font-size: 150%; text-align: center;}
+    h2 {font-size: 125%; text-align: center;}
+    table {margin-left:auto; margin-right:auto;}
+    img {display: block; margin-left:auto; margin-right:auto;}
+    tr:nth-child(even) {background-color: #f2f2f2}
+    th, td {padding: 5px;}
+    th {text-align: left;}
+    td {text-align: right; padding: 5px;}
+  </style>
+</head>
+<body>
+  <h1>Validation result</h1>
+    <h2>Dataset characteristics</h2>
+      {{setdescstat}}
+    <h2>Error measures</h2>
+      {{erragg}}
+    <h2>Correlation plot</h2>
+    <img src="{{fname}}_correl.png" alt="Matpllotlib unavailable or image lost"/>
+</body>
+</html>

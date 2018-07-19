@@ -10,7 +10,10 @@ argparser = rum.defaultArgumentParser(DESCRIPTION)
 argparser.add_argument('-s', '--cellsize', metavar='size',
     help='grid cell size in the extent CRS', type=int, default=100
 )
+argparser.add_argument('-o', '--overwrite', action='store_true',
+    help='overwrite existing grid'
+)
 
 if __name__ == '__main__':
     args = argparser.parse_args()
-    rum.GridMaker.fromArgs(args).run(args.cellsize)
+    rum.GridMaker.fromArgs(args).run(args.cellsize, args.overwrite)

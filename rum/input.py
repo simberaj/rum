@@ -105,6 +105,8 @@ class OSMImporter(Importer):
                         geom = feature['geometry']
                         geomtype = geom['type']
                         geom = shapely.geometry.shape(geom)
+                        if not geom.is_valid:
+                            geom = geom.buffer(0)
                         if not acceptor or acceptor(geom):
                             feature['geometry'] = geom
                             for e in self.listeners[geomtype]:
@@ -192,6 +194,7 @@ class OSMExtractor:
     
     def geometryToPoint(self, geom):
         return geom.representative_point() # guaranteed to be within
+        
     
     def transformProperties(self, props):
         transformed = {}
@@ -708,17 +711,21 @@ class LayerImporter(Importer):
         'float' : 'double precision'
     }
 
-    def main(self, path, table, encoding=None, sourceSRID=None, targetSRID=None, clipExtent=False, overwrite=False):
+    def main(self, path, table, encoding=None, sourceSRID=None, targetSRID=None, forcedGeometryType=None, clipExtent=False, overwrite=False):
         with fiona.drivers():
             with fiona.open(path, encoding=encoding) as source:
                 fields = self.getFieldDefs(source.meta['schema']['properties'])
+                geomtype = source.meta['schema']['geometry']
+                if forcedGeometryType and forcedGeometryType != geomtype:
+                    self.logger.info('forcing geometry to %s instead of %s', forcedGeometryType, geomtype)
+                    geomtype = forcedGeometryType
                 with self._connect() as cursor:
                     if not sourceSRID:
                         sourceSRID = self.getSourceSRID(cursor, source.meta['crs'])
                     writer = Writer(
                         self.schema, table,
                         fields=fields,
-                        geomtype=source.meta['schema']['geometry'],
+                        geomtype=geomtype,
                         sourceSRID=sourceSRID, 
                         targetSRID=targetSRID,
                         overwrite=overwrite
@@ -871,7 +878,7 @@ class Writer:
         extentSRID = self.getExtentSRID()
         if extentSRID:
             if targetSRID and extentSRID != targetSRID:
-                self.logger.warning('forced import SRID %d but extent already present with SRID %d, inconsistency will arise', targetSRID, extentSRID)
+                self.logger.warning('forced import SRID %d but extent already present with SRID %d', targetSRID, extentSRID)
             else:
                 targetSRID = extentSRID
         if not targetSRID:

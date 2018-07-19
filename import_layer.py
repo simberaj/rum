@@ -16,6 +16,9 @@ argparser.add_argument('-r', '--target-srid', metavar='srid',
 argparser.add_argument('-s', '--source-srid', metavar='srid',
     help='SRID of the imported layer', type=int, default=0
 )
+argparser.add_argument('-g', '--geom-type', metavar='geometry_type',
+    help='force output geometry type to this GeoJSON type'
+)
 argparser.add_argument('-e', '--clip-extent', action='store_true',
     help='import only features overlapping the analysis extent'
 )
@@ -36,6 +39,7 @@ if __name__ == '__main__':
         encoding=args.encoding,
         sourceSRID=args.source_srid,
         targetSRID=args.target_srid,
+        forcedGeometryType=args.geom_type,
         clipExtent=args.clip_extent,
         overwrite=args.overwrite
     )
