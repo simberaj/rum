@@ -9,55 +9,64 @@ from . import core
 from . import field
 
 PARTIAL_EXPRESSIONS = {
-    'item_length' : 'ST_Length({schema}.{table}.geometry)',
-    'item_area' : 'ST_Area({schema}.{table}.geometry)',
-    'common_length' : 'ST_Length(ST_Intersection({schema}.grid.geometry, {schema}.{table}.geometry))',
-    'common_area' : 'ST_Area(ST_Intersection({schema}.grid.geometry, {schema}.{table}.geometry))',
-    'cell_area' : 'ST_Area({schema}.{table}.geometry)'
+    'aux_item_length' : 'ST_Length({schema}.{table}.geometry)',
+    'aux_item_area' : 'ST_Area({schema}.{table}.geometry)',
+    'aux_common_length' : 'ST_Length(ST_Intersection({schema}.grid.geometry, {schema}.{table}.geometry))',
+    'aux_common_area' : 'ST_Area(ST_Intersection({schema}.grid.geometry, {schema}.{table}.geometry))',
+    'aux_cell_area' : 'ST_Area({schema}.{table}.geometry)'
 }
 
 class Calculator(core.DatabaseTask):
-    BASE_LEAD = '''CREATE {temp}TABLE {schema}.{target} AS (
+    BASE_LEAD = sql.SQL('''CREATE {temp}TABLE {schema}.{target} AS (
     WITH overlaid AS (
         SELECT
             {schema}.grid.geohash AS geohash,
-            '''
-    BASE_MID = '''        FROM {schema}.grid LEFT JOIN {schema}.{table}
+            ''')
+    BASE_MID = sql.SQL('''
+        FROM {schema}.grid LEFT JOIN {schema}.{table}
         ON ST_Intersects(
             {schema}.grid.geometry,
             {schema}.{table}.geometry
         )
     )
     SELECT
-        '''
-    BASE_TRAIL = '''    FROM overlaid
-    GROUP BY geohash
-    )'''
+        geohash,
+        ''')
+    BASE_TRAIL = sql.SQL('''
+    FROM overlaid GROUP BY geohash
+    )''')
     SEPARATOR = sql.SQL(',\n        ')
     ALIASER = sql.SQL(' AS ')
     
-    def getQuery(self, source, target, partials, finals, temporary=False):
-        return (
-            BASE_LEAD
-            + SEPARATOR.join(ALIASER.join(item) for item in itertools.chain(
-                partials, self.partialsFromFinals(finals)
-            )
-            + BASE_MID
-            + SEPARATOR.join(ALIASER.join(item) for item in finals)
-            + BASE_TRAIL
-        ).format(
+    def getQuery(self, cur, source, target, partials, finals, temporary=False):
+        finalFieldSelect = self.fieldSelect(finals)
+        return sql.SQL((
+            self.BASE_LEAD
+            + self.fieldSelect(itertools.chain(
+                partials, self.partialsFromFinals(finalFieldSelect.as_string(cur))
+            ))
+            + self.BASE_MID
+            + self.fieldSelect(finals)
+            + self.BASE_TRAIL
+        ).as_string(cur)).format(
             schema=self.schemaSQL,
             table=sql.Identifier(source),
             target=sql.Identifier(target),
-            temp=('TEMPORARY ' if temporary else ''),
+            temp=sql.SQL('TEMPORARY ' if temporary else ''),
         )
     
-    def partialsFromFinals(self, finals):
+    def partialsFromFinals(self, finexpr):
         partials = []
         for partname, partexpr in PARTIAL_EXPRESSIONS.items():
-            if any(partname in finexpr for finname, finexpr in finals):
-                partials.append((partname, partexpr))
+            if partname in finexpr:
+                partials.append((partname, sql.SQL(partexpr)))
         return partials
+        
+    def fieldSelect(self, fieldTuples):
+        return self.SEPARATOR.join(
+            self.ALIASER.join([expr, sql.Identifier(name)])
+            for name, expr in fieldTuples
+        )
     
     def calculate(self, cur, table, partials, finals, target=None, overwrite=False):
         if target is None:
@@ -69,9 +78,7 @@ class Calculator(core.DatabaseTask):
                 target = self.uniqueTableName(cur, target)
         self.logger.info('computing table %s from table %s', target, table)
         targetSQL = sql.Identifier(target)
-        qry = self.getQuery(table, target, partials, finals)
-        print(qry)
-        raise RuntimeError
+        qry = self.getQuery(cur, table, target, partials, finals).as_string(cur)
         if overwrite:
             dropqry = sql.SQL('DROP TABLE IF EXISTS {schema}.{target}').format(
                 schema=self.schemaSQL, target=targetSQL
@@ -113,9 +120,9 @@ class FeatureCalculator(Calculator):
                 
     def main(self, table, methods, sourceFields=[None], caseField=None, overwrite=False):
         definers = self.createDefiners(methods)
-        finals = []
         with self._connect() as cur:
             uniquesGetter = field.UniquesGetter(cur, self.schema, table)
+            finals = []
             for definer in definers:
                 for sourceField in sourceFields:
                     finals.extend(definer.get(
@@ -125,7 +132,7 @@ class FeatureCalculator(Calculator):
                     ))
             partialSet = set(sourceFields + [caseField])
             partialSet.discard(None)
-            partials = [(field, field) for field in partials]
+            partials = [(field, sql.Identifier(field)) for field in sorted(partialSet)]
             self.calculate(cur, table, partials, finals, overwrite=overwrite)
             # if None in partials:
 
@@ -133,7 +140,7 @@ class FeatureCalculator(Calculator):
         return [ExpressionDefiner.create(method) for method in methods]
             
                
-class ExpressionDefiner(FeatureCalculator):
+class ExpressionDefiner:
     CASE_PATTERN = sql.SQL('CASE WHEN {caseField}={value} THEN {numerator} ELSE 0 END')
     MAIN_PATTERN = sql.SQL('sum({numerator}) / {denominator}')
     
@@ -149,6 +156,8 @@ class ExpressionDefiner(FeatureCalculator):
     def get(self, uniquesGetter, sourceField=None, caseField=None, targetName=None):
         if targetName is None:
             targetName = self.code
+            if sourceField:
+                targetName += ('_' + sourceField)
         numeratorSQL = sql.SQL(self.numerator)
         if sourceField is not None:
             numeratorSQL = numeratorSQL.format(field=sql.Identifier(sourceField))
@@ -169,7 +178,7 @@ class ExpressionDefiner(FeatureCalculator):
             names = [targetName]
         return [
             (
-                self.code + '_' + name,
+                name,
                 self.MAIN_PATTERN.format(
                     numerator=numerator,
                     denominator=sql.SQL(self.denominator),
@@ -183,17 +192,17 @@ class ExpressionDefiner(FeatureCalculator):
 class DensityDefiner(ExpressionDefiner):
     code = 'dens'
     numerator = '1'
-    denominator = 'cell_area'
+    denominator = 'aux_cell_area'
            
 class LengthDefiner(ExpressionDefiner):
     code = 'len'
-    numerator = 'common_length'
-    denominator = 'cell_area'
+    numerator = 'aux_common_length'
+    denominator = 'aux_cell_area'
            
 class CoverageDefiner(ExpressionDefiner):
     code = 'cov'
-    numerator = 'common_area'
-    denominator = 'cell_area'
+    numerator = 'aux_common_area'
+    denominator = 'aux_cell_area'
     
 class SumDefiner(ExpressionDefiner):
     code = 'sum'
@@ -207,18 +216,18 @@ class AverageDefiner(ExpressionDefiner):
             
 class WeightedAverageDefiner(ExpressionDefiner):
     code = 'wavg'
-    numerator = '{field} * item_area'
-    denominator = 'sum(item_area)'
+    numerator = '{field} * aux_item_area'
+    denominator = 'sum(aux_item_area)'
     
 class DistributedSumDefiner(ExpressionDefiner):
     code = 'dsum'
-    numerator = '{field} * common_area / item_area'
+    numerator = '{field} * aux_common_area / aux_item_area'
     denominator = '1'
         
 class DistributedAverageDefiner(ExpressionDefiner):
     code = 'davg'
-    numerator = '{field} * common_area'
-    denominator = 'sum(common_area)'
+    numerator = '{field} * aux_common_area'
+    denominator = 'sum(aux_common_area)'
         
         
 ExpressionDefiner.CODES = {calc.code : calc for calc in [
