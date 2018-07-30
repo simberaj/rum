@@ -118,15 +118,26 @@ class DatabaseTask(Task):
     def fromConfig(cls, connConfig, schema):
         return cls(Connector.fromConfig(connConfig), schema=schema)
     
+    def getTableNames(self, cur, where=None):
+        qry = sql.SQL('''
+            SELECT table_name FROM information_schema.tables
+            WHERE table_schema={schema} AND ({where});
+        ''').format(
+            schema=sql.Literal(self.schema),
+            where=(where if where else sql.SQL('1')),
+        ).as_string(cur)
+        self.logger.debug('selecting grid columns: %s', qry)
+        cur.execute(qry)
+        return [row[0] for row in cur.fetchall()]
+        
     def getGridNames(self, cur, where=None):
         qry = sql.SQL('''
             SELECT column_name FROM information_schema.columns
-            WHERE table_schema={schema} AND table_name='grid'
-            {where}
+            WHERE table_schema={schema} AND table_name='grid' AND ({where})
             ORDER BY ordinal_position;
         ''').format(
             schema=sql.Literal(self.schema),
-            where=(where if where else sql.SQL('')),
+            where=(where if where else sql.SQL('1')),
         ).as_string(cur)
         self.logger.debug('selecting grid columns: %s', qry)
         cur.execute(qry)
@@ -134,7 +145,7 @@ class DatabaseTask(Task):
         
     def getGridFeatureNames(self, cur):
         return self.getGridNames(cur, 
-            where=sql.SQL("AND (column_name LIKE 'f\_%' OR column_name LIKE 'f_\_%')"),
+            where=sql.SQL("column_name LIKE 'f\_%' OR column_name LIKE 'f_\_%'"),
         )
    
    

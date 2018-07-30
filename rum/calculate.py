@@ -8,6 +8,13 @@ from psycopg2 import sql
 from . import core
 from . import field
 
+PARTIAL_EXPRESSIONS = {
+    'item_length' : 'ST_Length({schema}.{table}.geometry)',
+    'item_area' : 'ST_Area({schema}.{table}.geometry)',
+    'common_length' : 'ST_Length(ST_Intersection({schema}.grid.geometry, {schema}.{table}.geometry))',
+    'common_area' : 'ST_Area(ST_Intersection({schema}.grid.geometry, {schema}.{table}.geometry))',
+    'cell_area' : 'ST_Area({schema}.{table}.geometry)'
+}
 
 class Calculator(core.DatabaseTask):
     BASE_LEAD = '''CREATE {temp}TABLE {schema}.{target} AS (
@@ -28,20 +35,6 @@ class Calculator(core.DatabaseTask):
     )'''
     SEPARATOR = sql.SQL(',\n        ')
     ALIASER = sql.SQL(' AS ')
-    PARTIAL_EXPRESSIONS = {
-        'item_length' : 'ST_Length({schema}.{table}.geometry)',
-        'item_area' : 'ST_Area({schema}.{table}.geometry)',
-        'common_length' : 'ST_Length(ST_Intersection({schema}.grid.geometry, {schema}.{table}.geometry))',
-        'common_area' : 'ST_Area(ST_Intersection({schema}.grid.geometry, {schema}.{table}.geometry))',
-        'cell_area' : 'ST_Area({schema}.{table}.geometry)'
-    }
-    
-    # def getQuery(self, cur, sourceName, targetName):
-    
-    
-    
-        # expressions = [definer.expression(cur) for definer in self.definers]
-        # # TODO partials
     
     def getQuery(self, source, target, partials, finals, temporary=False):
         return (
@@ -61,52 +54,45 @@ class Calculator(core.DatabaseTask):
     
     def partialsFromFinals(self, finals):
         partials = []
-        for partname, partexpr in self.PARTIAL_EXPRESSIONS.items():
+        for partname, partexpr in PARTIAL_EXPRESSIONS.items():
             if any(partname in finexpr for finname, finexpr in finals):
                 partials.append((partname, partexpr))
         return partials
     
     def calculate(self, cur, table, partials, finals, target=None, overwrite=False):
         if target is None:
-            target = self.uniqueTableName('{type}_{table}'.format(
+            target = '{type}_{table}'.format(
                 type=self.type,
                 table=table
-            ))
+            )
+            if not overwrite:
+                target = self.uniqueTableName(cur, target)
         self.logger.info('computing table %s from table %s', target, table)
-        target = sql.Identifier(target)
+        targetSQL = sql.Identifier(target)
+        qry = self.getQuery(table, target, partials, finals)
+        print(qry)
+        raise RuntimeError
         if overwrite:
             dropqry = sql.SQL('DROP TABLE IF EXISTS {schema}.{target}').format(
-                schema=self.schemaSQL, target=target
+                schema=self.schemaSQL, target=targetSQL
             ).as_string(cur)
             self.logger.debug('overwriting: %s', dropqry)
             cur.execute(dropqry)
-        qry = self.getQuery(table, partials, finals)
         self.logger.debug('computing table: %s', qry)
         cur.execute(qry)
-        # if self.denullify:
-            # zeroqry = sql.SQL('''UPDATE {schema}.grid SET {targetField} = 0
-                # WHERE {targetField} IS NULL''').format(
-                # schema=self.schemaSQL,
-                # targetField=targetFieldSQL,
-            # ).as_string(cur)
-            # self.logger.debug('denulling field: %s', zeroqry)
-            # cur.execute(zeroqry)
-    
-    # def template(self, cur, expression):
-        # return (
-            # sql.SQL(self.BASE_LEAD)
-            # + expression
-            # + sql.SQL(self.BASE_TRAIL)
-        # ).as_string(cur)
-                
-    # def createField(self, cur, targetField, overwrite=False):
-        # self.createFields(cur, [targetField], overwrite=overwrite)
-    
-    # def expression(self, *args, **kwargs):
-        # raise NotImplementedError
-
-    # def where(self, *args, **kwargs):
-        # return None
+        
+    def uniqueTableName(self, cur, target):
+        currentNames = self.getTableNames(
+            cur,
+            where=sql.SQL("table_name LIKE {target}").format(
+                target=sql.Literal(target + '%')
+            )
+        )
+        if currentNames:
+            maxSuffix = max(int(name.rsplit('_', 1)) for name in currentNames)
+            return target + '_{:d}'.format(maxSuffix+1)
+        else:
+            return target
         
     def vacuumGrid(self):
         with self._connect(autocommit=True) as cur:
@@ -146,42 +132,6 @@ class FeatureCalculator(Calculator):
     def createDefiners(self, methods):
         return [ExpressionDefiner.create(method) for method in methods]
             
-        # cur, table, partials, finals, overwrite=False
-        
-        # calc = self.code
-        # if sourceField:
-            # calc += ('_' + sourceField)
-        # with self._connect() as cur:
-            # specifiers = self.getSpecifiers(cur, table, sourceField)
-            # if len(specifiers) > 1:
-                # self.logger.info('found %d subfields', len(specifiers))
-            # expression = sql.SQL(', ').join(
-                # self.expression(cur, sourceField, specifier)
-                # for specifier in specifiers
-            # )
-            # self.calculate(cur, table, expression, calc=calc, overwrite=overwrite)
-    
-    # def expression(self, cur, sourceField=None, specifier=None):
-        # definer = ''
-        # fname = 'val'
-        # if sourceField is not None:
-            # fname = sourceField
-            # if specifier is not None:
-                # definer = ''' * (CASE WHEN 
-                    # {{schema}}.{{table}}.{sourceField} = {specifier}
-                    # THEN 1 ELSE {nullity} END)'''
-                # fname += '_' + str(specifier)
-        # return sql.SQL(
-            # sql.SQL(self.expressionTemplate).format(
-                # definer=sql.SQL(definer)
-            # ).as_string(cur)
-        # ).format(
-            # sourceField=sql.Identifier(sourceField),
-            # specifier=sql.Literal(specifier),
-            # nullity=(sql.Literal(0) if self.denullify else sql.SQL('NULL')),
-        # ) + sql.SQL(' AS ') + sql.Identifier(fname)
-        
-    
                
 class ExpressionDefiner(FeatureCalculator):
     CASE_PATTERN = sql.SQL('CASE WHEN {caseField}={value} THEN {numerator} ELSE 0 END')
