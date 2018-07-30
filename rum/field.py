@@ -57,3 +57,27 @@ class Handler(core.DatabaseTask):
         cur.execute(creator)
     
 
+class UniquesGetter:
+    def __init__(self, cursor, schema, table):
+        self.cursor = cursor
+        self.schemaSQL = sql.Identifier(schema)
+        self.tableSQL = sql.Identifier(table)
+    
+    def get(self, field=None):
+        uniques = []
+        if field:
+            uniqueQry = sql.SQL(
+                'SELECT DISTINCT {field} FROM {schema}.{table}'
+            ).format(
+                schema=self.schemaSQL,
+                table=self.tableSQL,
+                field=sql.Identifier(field)
+            ).as_string(cur)
+            # self.logger.debug('retrieving unique values: %s', uniqueQry)
+            cur.execute(uniqueQry)
+            uniques = list(sorted(
+                row[0] for row in cur.fetchall()
+                if row[0] is not None
+            ))
+        return uniques if uniques else [None]
+    

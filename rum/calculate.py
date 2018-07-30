@@ -1,4 +1,4 @@
-import contextlib
+import itertools
 
 import numpy
 import scipy.ndimage
@@ -6,25 +6,72 @@ import psycopg2.extras
 from psycopg2 import sql
 
 from . import core
+from . import field
 
 
 class Calculator(core.DatabaseTask):
-    # targetType = 'double precision'
-    denullify = None
-    BASE_LEAD = '''CREATE TABLE {schema}.{target} AS SELECT '''
-    BASE_TRAIL = '''FROM {schema}.grid LEFT JOIN {schema}.{table}
+    BASE_LEAD = '''CREATE {temp}TABLE {schema}.{target} AS (
+    WITH overlaid AS (
+        SELECT
+            {schema}.grid.geohash AS geohash,
+            '''
+    BASE_MID = '''        FROM {schema}.grid LEFT JOIN {schema}.{table}
         ON ST_Intersects(
             {schema}.grid.geometry,
             {schema}.{table}.geometry
         )
-        GROUP BY {schema}.grid.geometry'''
+    )
+    SELECT
+        '''
+    BASE_TRAIL = '''    FROM overlaid
+    GROUP BY geohash
+    )'''
+    SEPARATOR = sql.SQL(',\n        ')
+    ALIASER = sql.SQL(' AS ')
+    PARTIAL_EXPRESSIONS = {
+        'item_length' : 'ST_Length({schema}.{table}.geometry)',
+        'item_area' : 'ST_Area({schema}.{table}.geometry)',
+        'common_length' : 'ST_Length(ST_Intersection({schema}.grid.geometry, {schema}.{table}.geometry))',
+        'common_area' : 'ST_Area(ST_Intersection({schema}.grid.geometry, {schema}.{table}.geometry))',
+        'cell_area' : 'ST_Area({schema}.{table}.geometry)'
+    }
     
-    def calculate(self, cur, table, expression, calc=None, overwrite=False):
-        target = 'grid_{type}_{table}'.format(
-            type=self.type,
-            table=table
+    # def getQuery(self, cur, sourceName, targetName):
+    
+    
+    
+        # expressions = [definer.expression(cur) for definer in self.definers]
+        # # TODO partials
+    
+    def getQuery(self, source, target, partials, finals, temporary=False):
+        return (
+            BASE_LEAD
+            + SEPARATOR.join(ALIASER.join(item) for item in itertools.chain(
+                partials, self.partialsFromFinals(finals)
+            )
+            + BASE_MID
+            + SEPARATOR.join(ALIASER.join(item) for item in finals)
+            + BASE_TRAIL
+        ).format(
+            schema=self.schemaSQL,
+            table=sql.Identifier(source),
+            target=sql.Identifier(target),
+            temp=('TEMPORARY ' if temporary else ''),
         )
-        if calc: target += ('_' + calc)
+    
+    def partialsFromFinals(self, finals):
+        partials = []
+        for partname, partexpr in self.PARTIAL_EXPRESSIONS.items():
+            if any(partname in finexpr for finname, finexpr in finals):
+                partials.append((partname, partexpr))
+        return partials
+    
+    def calculate(self, cur, table, partials, finals, target=None, overwrite=False):
+        if target is None:
+            target = self.uniqueTableName('{type}_{table}'.format(
+                type=self.type,
+                table=table
+            ))
         self.logger.info('computing table %s from table %s', target, table)
         target = sql.Identifier(target)
         if overwrite:
@@ -33,12 +80,7 @@ class Calculator(core.DatabaseTask):
             ).as_string(cur)
             self.logger.debug('overwriting: %s', dropqry)
             cur.execute(dropqry)
-        template = (sql.SQL(self.BASE_LEAD) + expression + sql.SQL(self.BASE_TRAIL)).as_string(cur)
-        qry = sql.SQL(template).format(
-            schema=self.schemaSQL,
-            table=sql.Identifier(table),
-            target=target
-        ).as_string(cur)
+        qry = self.getQuery(table, partials, finals)
         self.logger.debug('computing table: %s', qry)
         cur.execute(qry)
         # if self.denullify:
@@ -49,15 +91,22 @@ class Calculator(core.DatabaseTask):
             # ).as_string(cur)
             # self.logger.debug('denulling field: %s', zeroqry)
             # cur.execute(zeroqry)
-                
-    def createField(self, cur, targetField, overwrite=False):
-        self.createFields(cur, [targetField], overwrite=overwrite)
     
-    def expression(self, *args, **kwargs):
-        raise NotImplementedError
+    # def template(self, cur, expression):
+        # return (
+            # sql.SQL(self.BASE_LEAD)
+            # + expression
+            # + sql.SQL(self.BASE_TRAIL)
+        # ).as_string(cur)
+                
+    # def createField(self, cur, targetField, overwrite=False):
+        # self.createFields(cur, [targetField], overwrite=overwrite)
+    
+    # def expression(self, *args, **kwargs):
+        # raise NotImplementedError
 
-    def where(self, *args, **kwargs):
-        return None
+    # def where(self, *args, **kwargs):
+        # return None
         
     def vacuumGrid(self):
         with self._connect(autocommit=True) as cur:
@@ -71,149 +120,185 @@ class Calculator(core.DatabaseTask):
         
         
 class FeatureCalculator(Calculator):
-    type = 'f'
+    type = 'feat'
 
     def getSpecifiers(self, cur, table, sourceField):
         return [None]
                 
+    def main(self, table, methods, sourceFields=[None], caseField=None, overwrite=False):
+        definers = self.createDefiners(methods)
+        finals = []
+        with self._connect() as cur:
+            uniquesGetter = field.UniquesGetter(cur, self.schema, table)
+            for definer in definers:
+                for sourceField in sourceFields:
+                    finals.extend(definer.get(
+                        uniquesGetter,
+                        sourceField=sourceField,
+                        caseField=caseField
+                    ))
+            partialSet = set(sourceFields + [caseField])
+            partialSet.discard(None)
+            partials = [(field, field) for field in partials]
+            self.calculate(cur, table, partials, finals, overwrite=overwrite)
+            # if None in partials:
+
+    def createDefiners(self, methods):
+        return [ExpressionDefiner.create(method) for method in methods]
+            
+        # cur, table, partials, finals, overwrite=False
+        
+        # calc = self.code
+        # if sourceField:
+            # calc += ('_' + sourceField)
+        # with self._connect() as cur:
+            # specifiers = self.getSpecifiers(cur, table, sourceField)
+            # if len(specifiers) > 1:
+                # self.logger.info('found %d subfields', len(specifiers))
+            # expression = sql.SQL(', ').join(
+                # self.expression(cur, sourceField, specifier)
+                # for specifier in specifiers
+            # )
+            # self.calculate(cur, table, expression, calc=calc, overwrite=overwrite)
+    
+    # def expression(self, cur, sourceField=None, specifier=None):
+        # definer = ''
+        # fname = 'val'
+        # if sourceField is not None:
+            # fname = sourceField
+            # if specifier is not None:
+                # definer = ''' * (CASE WHEN 
+                    # {{schema}}.{{table}}.{sourceField} = {specifier}
+                    # THEN 1 ELSE {nullity} END)'''
+                # fname += '_' + str(specifier)
+        # return sql.SQL(
+            # sql.SQL(self.expressionTemplate).format(
+                # definer=sql.SQL(definer)
+            # ).as_string(cur)
+        # ).format(
+            # sourceField=sql.Identifier(sourceField),
+            # specifier=sql.Literal(specifier),
+            # nullity=(sql.Literal(0) if self.denullify else sql.SQL('NULL')),
+        # ) + sql.SQL(' AS ') + sql.Identifier(fname)
+        
+    
+               
+class ExpressionDefiner(FeatureCalculator):
+    CASE_PATTERN = sql.SQL('CASE WHEN {caseField}={value} THEN {numerator} ELSE 0 END')
+    MAIN_PATTERN = sql.SQL('sum({numerator}) / {denominator}')
+    
     @classmethod
-    def create(cls, code, args):
+    def create(cls, code):
         try:
-            return cls.CODES[code.lower()].fromArgs(args)
+            return cls.CODES[code.lower()]()
         except KeyError as err:
             raise core.InvalidParameterError('invalid method {}, allowed: {}'.format(
                 code, ', '.join(cls.CODES.keys())
             ))
-        
-    def main(self, table, sourceField=None, overwrite=False):
-        calc = self.code
-        if sourceField:
-            calc += ('_' + sourceField)
-        with self._connect() as cur:
-            specifiers = self.getSpecifiers(cur, table, sourceField)
-            if len(specifiers) > 1:
-                self.logger.info('found %d subfields', len(specifiers))
-            expression = sql.SQL(', ').join(
-                self.expression(cur, sourceField, specifier)
-                for specifier in specifiers
-            )
-            self.calculate(cur, table, expression, calc=calc, overwrite=overwrite)
-    
-    def expression(self, cur, sourceField=None, specifier=None):
-        definer = ''
-        fname = 'val'
-        if sourceField is not None:
-            fname = sourceField
-            if specifier is not None:
-                definer = ''' * (CASE WHEN 
-                    {{schema}}.{{table}}.{sourceField} = {specifier}
-                    THEN 1 ELSE 0 END)'''
-                fname += '_' + str(specifier)
-        return sql.SQL(
-            sql.SQL(self.expressionTemplate).format(
-                definer=sql.SQL(definer)
-            ).as_string(cur)
-        ).format(
-            sourceField=sql.Identifier(sourceField),
-            specifier=sql.Literal(specifier),
-        ) + sql.SQL(' AS ') + sql.Identifier(fname)
-        
-    
-               
-class CategorizableCalculator(FeatureCalculator):
-    denullify = True
-
-    def getSpecifiers(self, cur, table, sourceField=None):
-        if sourceField:
-            uniqueQry = sql.SQL(
-                'SELECT DISTINCT {sourceField} FROM {schema}.{table}'
-            ).format(
-                schema=self.schemaSQL,
-                table=sql.Identifier(table),
-                sourceField=sql.Identifier(sourceField)
-            ).as_string(cur)
-            self.logger.debug('retrieving unique values: %s', uniqueQry)
-            cur.execute(uniqueQry)
-            return list(sorted(row[0] for row in cur.fetchall() if row[0] is not None))
-        else:
-            return [None]
-        
-        
-class CoverageCalculator(CategorizableCalculator):
-    code = 'cov'
-    expressionTemplate = '''sum(ST_Area(ST_Intersection(
-            {{{{schema}}}}.grid.geometry, {{{{schema}}}}.{{{{table}}}}.geometry
-        )){definer}) / ST_Area({{{{schema}}}}.grid.geometry)
-    '''
-    
-class DensityCalculator(CategorizableCalculator):
-    code = 'dens'
-    expressionTemplate = 'sum(1){definer} / ST_Area({{{{schema}}}}.grid.geometry)'
-           
-class LengthCalculator(CategorizableCalculator):
-    code = 'len'
-    expressionTemplate = '''sum(ST_Length(ST_Intersection(
-        {{{{schema}}}}.grid.geometry, {{{{schema}}}}.{{{{table}}}}.geometry
-    )){definer}) / ST_Area({{{{schema}}}}.grid.geometry)
-    '''
-       
-       
-class AverageCalculator(FeatureCalculator):
-    code = 'avg'
-    denullify = False
-    expressionTemplate = 'sum({{{{schema}}}}.{{{{table}}}}.{{sourceField}}){definer} / count(1)'
             
-class WeightedAverageCalculator(AverageCalculator):
-    code = 'wavg'
-    expressionTemplate = '''sum(
-            {{{{schema}}}}.{{{{table}}}}.{{sourceField}}
-            * ST_Area({{{{schema}}}}.{{{{table}}}}.geometry){definer}
-        ) / sum(ST_Area({{{{schema}}}}.{{{{table}}}}.geometry))
-    '''
+    def get(self, uniquesGetter, sourceField=None, caseField=None, targetName=None):
+        if targetName is None:
+            targetName = self.code
+        numeratorSQL = sql.SQL(self.numerator)
+        if sourceField is not None:
+            numeratorSQL = numeratorSQL.format(field=sql.Identifier(sourceField))
+        if caseField is not None:
+            uniques = uniquesGetter.get(caseField)
+            caseFieldSQL = sql.Identifier(caseField)
+            numerators = [
+                self.CASE_PATTERN.format(
+                    caseField=caseFieldSQL,
+                    value=value,
+                    numerator=numeratorSQL
+                )
+                for value in uniques
+            ]
+            names = [targetName + '_' + caseField + '_' + str(value) for value in uniques]
+        else:
+            numerators = [numeratorSQL]
+            names = [targetName]
+        return [
+            (
+                self.code + '_' + name,
+                self.MAIN_PATTERN.format(
+                    numerator=numerator,
+                    denominator=sql.SQL(self.denominator),
+                )
+            )
+            for numerator, name in zip(numerators, names)
+        ]
+
         
-FeatureCalculator.CODES = {calc.code : calc for calc in [
-    CoverageCalculator,
-    DensityCalculator,
-    LengthCalculator,
-    AverageCalculator,
-    WeightedAverageCalculator,
+        
+class DensityDefiner(ExpressionDefiner):
+    code = 'dens'
+    numerator = '1'
+    denominator = 'cell_area'
+           
+class LengthDefiner(ExpressionDefiner):
+    code = 'len'
+    numerator = 'common_length'
+    denominator = 'cell_area'
+           
+class CoverageDefiner(ExpressionDefiner):
+    code = 'cov'
+    numerator = 'common_area'
+    denominator = 'cell_area'
+    
+class SumDefiner(ExpressionDefiner):
+    code = 'sum'
+    numerator = '{field}'
+    denominator = '1'
+            
+class AverageDefiner(ExpressionDefiner):
+    code = 'avg'
+    numerator = '{field}'
+    denominator = 'count(1)'
+            
+class WeightedAverageDefiner(ExpressionDefiner):
+    code = 'wavg'
+    numerator = '{field} * item_area'
+    denominator = 'sum(item_area)'
+    
+class DistributedSumDefiner(ExpressionDefiner):
+    code = 'dsum'
+    numerator = '{field} * common_area / item_area'
+    denominator = '1'
+        
+class DistributedAverageDefiner(ExpressionDefiner):
+    code = 'davg'
+    numerator = '{field} * common_area'
+    denominator = 'sum(common_area)'
+        
+        
+ExpressionDefiner.CODES = {calc.code : calc for calc in [
+    DensityDefiner,
+    LengthDefiner,
+    CoverageDefiner,
+    SumDefiner,
+    AverageDefiner,
+    WeightedAverageDefiner,
+    DistributedSumDefiner,
+    DistributedAverageDefiner
 ]}
 
 
 class TargetCalculator(Calculator):
-    type = 't'
-    TEMPLATES = {
-        ('POINT', False) : 'sum({sourceField}) / ST_Area({{schema}}.grid.geometry)',
-        ('POINT', True) : 'avg({sourceField})',
-        ('POLYGON', False) : '''sum({sourceField}
-            * ST_Area(ST_Intersection({{schema}}.grid.geometry, {{schema}}.{{table}}.geometry))
-            / ST_Area({{schema}}.{{table}}.geometry)
-        )''',
-        ('POLYGON', True) : '''sum(
-            {sourceField} * ST_Area(ST_Intersection(
-                {{schema}}.grid.geometry, {{schema}}.{{table}}.geometry
-            ))
-        ) / sum(ST_Area(ST_Intersection(
-            {{schema}}.grid.geometry, {{schema}}.{{table}}.geometry
-            ))
-        )''',
+    type = 'tgt'
+    DEFINERS = {
+        ('POINT', False) : SumDefiner,
+        ('POINT', True) : AverageDefiner,
+        ('POLYGON', False) : DistributedSumDefiner,
+        ('POLYGON', True) : DistributedAverageDefiner,
     }
     
-    def main(self, table, sourceField, relative=False, overwrite=False):
+    def main(self, table, target, sourceField, relative=False, overwrite=False):
         with self._connect() as cur:
-            self.calculate(cur, table,
-                expression=self.expression(table, sourceField, relative),
-                overwrite=overwrite
-            )
-            
-    def expression(self, cur, table, sourceField, relative=False, **garbage):
-        return sql.SQL(
-            self.TEMPLATES[self.getGeometryType(cur, table), relative]
-        ).format(
-            sourceField=sql.Identifier(sourceField)
-        ) + sql.SQL(' AS target')
-
-        
+            definer = self.DEFINERS[self.getGeometryType(cur, table), relative]()
+            finals = definer.get(None, sourceField, targetName='target')
+            partials = [sourceField]
+            self.calculate(cur, table, partials, finals, overwrite=overwrite)
+                    
     def getGeometryType(self, cur, table):
         qry = sql.SQL('''SELECT type FROM geometry_columns
             WHERE f_table_schema={schema}
@@ -240,7 +325,9 @@ class NeighbourhoodCalculator(Calculator):
             if not self.hasGridCoordinateFields(cur):
                 self.addCoordinatesToGrid(cur)
             allNames = self.getGridNames(cur)
-        mainfeats, all_todos = self.generateTodoFields(allNames, multipliers, overwrite=overwrite)
+            mainfeats, all_todos = self.generateTodoFields(
+                allNames, multipliers, overwrite=overwrite
+            )
         # self.logger.info('creating neighbourhood feature fields')
         # with self._connect() as cur:
             # self.createFields(
@@ -249,18 +336,16 @@ class NeighbourhoodCalculator(Calculator):
                 # overwrite=overwrite
             # )
         # self.vacuumGrid()
-        for feat, todos in zip(mainfeats, all_todos):
-            if todos:
-                with self._connect() as cur:
+            for feat, todos in zip(mainfeats, all_todos):
+                if todos:
                     self.logger.info('calculating neighbourhood from %s', feat)
                     raster = self.load(cur, feat)
-                for mult, outfeat in todos:
-                    with self._connect() as cur:
+                    outrasters = []
+                    for mult, outfeat in todos:
                         self.createField(cur, outfeat, overwrite=overwrite)
                         self.logger.info('blurring %s with %f multiplier', feat, mult)
-                        outrast = self.gaussify(raster, mult)
-                        self.save(cur, outfeat, outrast)
-                    self.vacuumGrid()
+                        outrasters.append((outfeat, self.gaussify(raster, mult)))
+                    self.save(cur, outrasters)
                         
     def generateTodoFields(self, allNames, multipliers, overwrite=False):
         mainfeats = [feat for feat in allNames if feat.startswith('f_')]
@@ -337,7 +422,7 @@ class NeighbourhoodCalculator(Calculator):
         array[xs,ys] = fs
         return array
             
-    def save(self, cur, feature, raster):
+    def save(self, cur, outrasters):
         insertflds = [list(item) for item in zip(*(
             indexes + (value, )
             for indexes, value in numpy.ndenumerate(raster)
@@ -377,3 +462,35 @@ class NeighbourhoodCalculator(Calculator):
         return 'fn_' + featName[2:] + '_' + multpart
 
         
+# class CoverageCalculator(CategorizableCalculator):
+    # code = 'cov'
+    # expressionTemplate = '''sum(ST_Area(ST_Intersection(
+            # {{{{schema}}}}.grid.geometry, {{{{schema}}}}.{{{{table}}}}.geometry
+        # )){definer}) / ST_Area({{{{schema}}}}.grid.geometry)
+    # '''
+    
+# class DensityCalculator(CategorizableCalculator):
+    # code = 'dens'
+    # expressionTemplate = 'sum(1){definer} / ST_Area({{{{schema}}}}.grid.geometry)'
+           
+# class LengthCalculator(CategorizableCalculator):
+    # code = 'len'
+    # expressionTemplate = '''sum(ST_Length(ST_Intersection(
+        # {{{{schema}}}}.grid.geometry, {{{{schema}}}}.{{{{table}}}}.geometry
+    # )){definer}) / ST_Area({{{{schema}}}}.grid.geometry)
+    # '''
+       
+       
+# class AverageCalculator(FeatureCalculator):
+    # code = 'avg'
+    # denullify = False
+    # expressionTemplate = 'sum({{{{schema}}}}.{{{{table}}}}.{{sourceField}}){definer} / count(1)'
+            
+# class WeightedAverageCalculator(AverageCalculator):
+    # code = 'wavg'
+    # expressionTemplate = '''sum(
+            # {{{{schema}}}}.{{{{table}}}}.{{sourceField}}
+            # * ST_Area({{{{schema}}}}.{{{{table}}}}.geometry){definer}
+        # ) / sum(ST_Area({{{{schema}}}}.{{{{table}}}}.geometry))
+    # '''
+    
