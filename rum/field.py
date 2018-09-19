@@ -72,11 +72,11 @@ class UniquesGetter:
                 schema=self.schemaSQL,
                 table=self.tableSQL,
                 field=sql.Identifier(field)
-            ).as_string(cur)
+            ).as_string(self.cursor)
             # self.logger.debug('retrieving unique values: %s', uniqueQry)
-            cur.execute(uniqueQry)
+            self.cursor.execute(uniqueQry)
             uniques = list(sorted(
-                row[0] for row in cur.fetchall()
+                row[0] for row in self.cursor.fetchall()
                 if row[0] is not None
             ))
         return uniques if uniques else [None]

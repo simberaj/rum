@@ -68,7 +68,7 @@ class Calculator(core.DatabaseTask):
             for name, expr in fieldTuples
         )
     
-    def calculate(self, cur, table, partials, finals, target=None, overwrite=False):
+    def calculate(self, cur, table, partials, finals, target=None, overwrite=False, bannedNames=[]):
         if target is None:
             target = '{type}_{table}'.format(
                 type=self.type,
@@ -76,6 +76,8 @@ class Calculator(core.DatabaseTask):
             )
             if not overwrite:
                 target = self.uniqueTableName(cur, target)
+            elif target in bannedNames:
+                target = self.uniqueTableName(cur, target, names=bannedNames)            
         self.logger.info('computing table %s from table %s', target, table)
         targetSQL = sql.Identifier(target)
         qry = self.getQuery(cur, table, target, partials, finals).as_string(cur)
@@ -87,17 +89,28 @@ class Calculator(core.DatabaseTask):
             cur.execute(dropqry)
         self.logger.debug('computing table: %s', qry)
         cur.execute(qry)
+        return target
         
-    def uniqueTableName(self, cur, target):
-        currentNames = self.getTableNames(
-            cur,
-            where=sql.SQL("table_name LIKE {target}").format(
-                target=sql.Literal(target + '%')
+    def uniqueTableName(self, cur, target, names=[]):
+        if names:
+            currentNames = [name for name in names if target in name]
+        else:
+            currentNames = self.getTableNames(
+                cur,
+                where=sql.SQL("table_name LIKE {target}").format(
+                    target=sql.Literal(target + '%')
+                )
             )
-        )
+        maxSuffix = -1
         if currentNames:
-            maxSuffix = max(int(name.rsplit('_', 1)) for name in currentNames)
-            return target + '_{:d}'.format(maxSuffix+1)
+            maxSuffix = 0
+        for name in currentNames:
+            suffix = name.rsplit('_', 1)[-1]
+            if suffix.isdigit():
+                if int(suffix) > maxSuffix:
+                    maxSuffix = int(suffix)
+        if maxSuffix >= 0:
+            return target + '_{:d}'.format(maxSuffix + 1)
         else:
             return target
         
@@ -118,7 +131,9 @@ class FeatureCalculator(Calculator):
     def getSpecifiers(self, cur, table, sourceField):
         return [None]
                 
-    def main(self, table, methods, sourceFields=[None], caseField=None, overwrite=False):
+    def main(self, table, methods, sourceFields=None, caseField=None, overwrite=False, bannedNames=[]):
+        if sourceFields is None:
+            sourceFields = [None]
         definers = self.createDefiners(methods)
         with self._connect() as cur:
             uniquesGetter = field.UniquesGetter(cur, self.schema, table)
@@ -133,7 +148,13 @@ class FeatureCalculator(Calculator):
             partialSet = set(sourceFields + [caseField])
             partialSet.discard(None)
             partials = [(field, sql.Identifier(field)) for field in sorted(partialSet)]
-            self.calculate(cur, table, partials, finals, overwrite=overwrite)
+            target = self.calculate(
+                cur, table,
+                partials, finals,
+                overwrite=overwrite,
+                bannedNames=bannedNames
+            )
+            return target
             # if None in partials:
 
     def createDefiners(self, methods):
@@ -142,7 +163,7 @@ class FeatureCalculator(Calculator):
                
 class ExpressionDefiner:
     CASE_PATTERN = sql.SQL('CASE WHEN {caseField}={value} THEN {numerator} ELSE 0 END')
-    MAIN_PATTERN = sql.SQL('sum({numerator}) / {denominator}')
+    MAIN_PATTERN = sql.SQL('(CASE WHEN {denominator} = 0 THEN 0 ELSE sum({numerator}) / {denominator} END)')
     
     @classmethod
     def create(cls, code):
@@ -167,7 +188,7 @@ class ExpressionDefiner:
             numerators = [
                 self.CASE_PATTERN.format(
                     caseField=caseFieldSQL,
-                    value=value,
+                    value=sql.Literal(value),
                     numerator=numeratorSQL
                 )
                 for value in uniques
@@ -192,17 +213,17 @@ class ExpressionDefiner:
 class DensityDefiner(ExpressionDefiner):
     code = 'dens'
     numerator = '1'
-    denominator = 'aux_cell_area'
+    denominator = 'sum(aux_cell_area)'
            
 class LengthDefiner(ExpressionDefiner):
     code = 'len'
     numerator = 'aux_common_length'
-    denominator = 'aux_cell_area'
+    denominator = 'sum(aux_cell_area)'
            
 class CoverageDefiner(ExpressionDefiner):
     code = 'cov'
     numerator = 'aux_common_area'
-    denominator = 'aux_cell_area'
+    denominator = 'sum(aux_cell_area)'
     
 class SumDefiner(ExpressionDefiner):
     code = 'sum'
@@ -283,18 +304,11 @@ class NeighbourhoodCalculator(Calculator):
             self.retrieveGridDimensions(cur)
             if not self.hasGridCoordinateFields(cur):
                 self.addCoordinatesToGrid(cur)
-            allNames = self.getGridNames(cur)
+            allFeats = self.getFeatureNames(cur)
+            self.createIndices(list(allFeats.keys()))
             mainfeats, all_todos = self.generateTodoFields(
-                allNames, multipliers, overwrite=overwrite
+                allFeats, multipliers, overwrite=overwrite
             )
-        # self.logger.info('creating neighbourhood feature fields')
-        # with self._connect() as cur:
-            # self.createFields(
-                # cur, 
-                # [featname for chunk in all_todos for mult, featname in chunk],
-                # overwrite=overwrite
-            # )
-        # self.vacuumGrid()
             for feat, todos in zip(mainfeats, all_todos):
                 if todos:
                     self.logger.info('calculating neighbourhood from %s', feat)
@@ -339,7 +353,7 @@ class NeighbourhoodCalculator(Calculator):
         self.logger.debug('grid dimensions: %s, starting at (%f;%f), cellsize %f',
             self.shape, self.xmin, self.ymin, self.cellsize
         )
-        
+            
     def hasGridCoordinateFields(self, cur):
         gridfields = self.getGridNames(cur)
         return 'cell_x' in gridfields and 'cell_y' in gridfields
@@ -419,37 +433,3 @@ class NeighbourhoodCalculator(Calculator):
         if multpart.endswith('_0'):
             multpart = multpart[:-2]
         return 'fn_' + featName[2:] + '_' + multpart
-
-        
-# class CoverageCalculator(CategorizableCalculator):
-    # code = 'cov'
-    # expressionTemplate = '''sum(ST_Area(ST_Intersection(
-            # {{{{schema}}}}.grid.geometry, {{{{schema}}}}.{{{{table}}}}.geometry
-        # )){definer}) / ST_Area({{{{schema}}}}.grid.geometry)
-    # '''
-    
-# class DensityCalculator(CategorizableCalculator):
-    # code = 'dens'
-    # expressionTemplate = 'sum(1){definer} / ST_Area({{{{schema}}}}.grid.geometry)'
-           
-# class LengthCalculator(CategorizableCalculator):
-    # code = 'len'
-    # expressionTemplate = '''sum(ST_Length(ST_Intersection(
-        # {{{{schema}}}}.grid.geometry, {{{{schema}}}}.{{{{table}}}}.geometry
-    # )){definer}) / ST_Area({{{{schema}}}}.grid.geometry)
-    # '''
-       
-       
-# class AverageCalculator(FeatureCalculator):
-    # code = 'avg'
-    # denullify = False
-    # expressionTemplate = 'sum({{{{schema}}}}.{{{{table}}}}.{{sourceField}}){definer} / count(1)'
-            
-# class WeightedAverageCalculator(AverageCalculator):
-    # code = 'wavg'
-    # expressionTemplate = '''sum(
-            # {{{{schema}}}}.{{{{table}}}}.{{sourceField}}
-            # * ST_Area({{{{schema}}}}.{{{{table}}}}.geometry){definer}
-        # ) / sum(ST_Area({{{{schema}}}}.{{{{table}}}}.geometry))
-    # '''
-    

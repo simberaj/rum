@@ -19,7 +19,20 @@ if __name__ == '__main__':
     args = argparser.parse_args()
     with open(args.taskfile) as infile:
         taskconf = json.load(infile)
+    fcalc = rum.calculate.FeatureCalculator.fromArgs(args)
+    tableNames = []
     for taskdef in taskconf['tasks']:
-        rum.calculate.FeatureCalculator.create(taskdef['method'], args).run(
-            taskdef['table'], taskdef.get('field', None), args.overwrite
-        )
+        methdef = taskdef['method']
+        if not isinstance(methdef, list):
+            methdef = [methdef]
+        sourcedef = taskdef.get('source', None)
+        if not isinstance(sourcedef, list):
+            sourcedef = [sourcedef]
+        tableNames.append(fcalc.run(
+            table=taskdef['table'],
+            methods=methdef,
+            sourceFields=sourcedef,
+            caseField=taskdef.get('case', None),
+            overwrite=args.overwrite,
+            bannedNames=tableNames
+        ))
