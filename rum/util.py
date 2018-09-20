@@ -126,7 +126,64 @@ class FeatureClearer(core.DatabaseTask):
                     )
                 )
 
-
+class FeatureConsolidator(core.DatabaseTask):
+    def main(self, overwrite=False):
+        with self._connect() as cur:
+            if overwrite:
+                self.logger.debug('dropping all_feats table')
+                cur.execute(
+                    sql.SQL('DROP TABLE IF EXISTS {schema}.all_feats;').format(
+                        schema=self.schemaSQL
+                    )
+                )
+            featnames = self.getFeatureNames(cur)
+            qry = self.consolidationQuery(featnames).as_string(cur)
+            self.logger.debug('consolidating features: %s', qry)
+            cur.execute(qry)
+            
+    def consolidationQuery(self, featnames):
+        fieldsSQLs = []
+        tablesSQLs = []
+        for table, columns in featnames.items():
+            tableIdent = sql.Identifier(table)
+            tablePrefix = table[5:]
+            if tablePrefix.startswith('neigh_'):
+                tablePrefix = tablePrefix[6:]
+            for column in columns:
+                fieldsSQLs.append(
+                    sql.SQL('{schema}.{table}.{column} AS {newname}').format(
+                        schema=self.schemaSQL,
+                        table=tableIdent,
+                        column=sql.Identifier(column),
+                        newname=sql.Identifier(tablePrefix + '_' + column)
+                    )
+                )
+            if tablesSQLs:
+                tablesSQLs.append(
+                    sql.SQL('{schema}.{table} ON {schema}.{table}.geohash={first}.geohash').format(
+                        schema=self.schemaSQL,
+                        table=tableIdent,
+                        first=tablesSQLs[0]
+                    )
+                )
+            else:
+                tablesSQLs.append(
+                    sql.SQL('{schema}.{table}').format(
+                        schema=self.schemaSQL,
+                        table=tableIdent,
+                    )
+                )
+        return (
+            sql.SQL('CREATE TABLE {schema}.all_feats AS SELECT {first}.geohash,\n').format(
+                schema=self.schemaSQL,
+                first=tablesSQLs[0]
+            )
+            + sql.SQL(',\n').join(fieldsSQLs)
+            + sql.SQL(' FROM ')
+            + sql.SQL('\nJOIN ').join(tablesSQLs)
+        )
+        
+            
 
 class Disaggregator(core.DatabaseTask):
     disagPattern = sql.SQL('''

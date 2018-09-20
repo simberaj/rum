@@ -63,6 +63,10 @@ class Calculator(core.DatabaseTask):
         return partials
         
     def fieldSelect(self, fieldTuples):
+        # for ftup in fieldTuples:
+            # for item in ftup:
+                # print(item)
+            # print()
         return self.SEPARATOR.join(
             self.ALIASER.join([expr, sql.Identifier(name)])
             for name, expr in fieldTuples
@@ -272,11 +276,14 @@ class TargetCalculator(Calculator):
         ('POLYGON', True) : DistributedAverageDefiner,
     }
     
-    def main(self, table, target, sourceField, relative=False, overwrite=False):
+    def main(self, table, sourceField, relative=False, overwrite=False):
         with self._connect() as cur:
             definer = self.DEFINERS[self.getGeometryType(cur, table), relative]()
             finals = definer.get(None, sourceField, targetName='target')
-            partials = [sourceField]
+            partials = [(sourceField, sql.Identifier(sourceField))]
+            print(table)
+            print(partials)
+            print(finals)
             self.calculate(cur, table, partials, finals, overwrite=overwrite)
                     
     def getGeometryType(self, cur, table):
