@@ -156,6 +156,16 @@ class DatabaseTask(Task):
         for table, column in cur.fetchall():
             feats.setdefault(table, []).append(column)
         return feats
+        
+    def getConsolidatedFeatureNames(self, cur):
+        qry = sql.SQL('''
+            SELECT column_name FROM information_schema.columns
+            WHERE table_schema={schema} AND table_name='all_feats' AND column_name<>'geohash'
+            ORDER BY ordinal_position;
+        ''').format(schema=sql.Literal(self.schema)).as_string(cur)
+        self.logger.debug('selecting consolidated feature columns: %s', qry)
+        cur.execute(qry)
+        return [row[0] for row in cur.fetchall()]
    
    
 class Initializer(DatabaseTask):

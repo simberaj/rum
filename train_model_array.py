@@ -14,11 +14,11 @@ for name, cls in rum.model.Model.TYPES.items():
     DESCRIPTION += '- {name}: {cls}\n'.format(name=name, cls=cls.__name__)
 
 argparser = rum.defaultArgumentParser(DESCRIPTION)
-argparser.add_argument('target_field', help='target field for modeling')
+argparser.add_argument('target_table', help='table with target field for modeling')
 argparser.add_argument('dir', help='directory to save the trained models to')
 
 if __name__ == '__main__':
     args = argparser.parse_args()
     rum.model.ModelArrayTrainer.fromArgs(args).run(
-        args.target_field, args.dir
+        args.target_table, args.dir
     )

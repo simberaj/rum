@@ -62,45 +62,42 @@ class Model:
         
         
 class ModelTrainer(field.Handler):        
-    def main(self, modeltype, targetName, outpath, **kwargs):
+    def main(self, modeltype, targetTable, outpath, **kwargs):
         model = Model(modeltype, **kwargs)
-        model.setTargetName(targetName)
+        model.setTargetName(targetTable[4:])
         with self._connect() as cur:
-            featureNames = self.getGridFeatureNames(cur)
+            featureNames = self.getConsolidatedFeatureNames(cur)
             model.setFeatureNames(featureNames)
             self.logger.info('selecting training values')
-            features, target = self.selectFeaturesAndTarget(
-                cur, featureNames, targetName
-            )
+            features, target = self.selectFeaturesAndTarget(cur, featureNames, targetTable)
             self.logger.info('training model')
             model.fit(features, target)
             self.logger.info('saving model to %s', outpath)
             with open(outpath, 'wb') as outfile:
                 model.save(outfile)
                 
-    def selectFeaturesAndTarget(self, cur, featureNames, targetName):
-        data = self.selectValues(cur, featureNames + [targetName], inside=True)
-        targets = data[targetName].values
-        targets[numpy.isnan(targets)] = 0
-        data.drop(targetName, axis=1, inplace=True)
-        data.fillna(0, inplace=True)
-        return data.values, targets
+    def selectFeaturesAndTarget(self, cur, featureNames, targetTable):
+        return (
+            self.selectConsolidatedFeatures(cur, featureNames, inside=True).fillna(0).values,
+            self.selectTarget(cur, targetTable, inside=True).fillna(0).values
+        )
+
         
 class ModelArrayTrainer(ModelTrainer):
-    def main(self, targetName, outpath, **kwargs):
+    def main(self, targetTable, outpath, **kwargs):
         if not os.path.isdir(outpath):
             os.mkdir(outpath)
         with self._connect() as cur:
-            featureNames = self.getGridFeatureNames(cur)
+            featureNames = self.getConsolidatedFeatureNames(cur)
             self.logger.info('selecting training values')
             features, target = self.selectFeaturesAndTarget(
-                cur, featureNames, targetName
+                cur, featureNames, targetTable
             )
             self.logger.info('training models to %s', outpath)
             for modeltype in Model.TYPES.keys():
                 model = Model(modeltype, **kwargs)
                 self.logger.info('training %s', model.typename)
-                model.setTargetName(targetName)
+                model.setTargetName(targetTable)
                 model.setFeatureNames(featureNames)
                 model.fit(features, target)
                 outmodpath = os.path.join(
