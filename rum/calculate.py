@@ -299,123 +299,78 @@ class TargetCalculator(Calculator):
 
         
 class NeighbourhoodCalculator(Calculator):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        with self._connect() as cur:
+            self.locator = CellLocator.fromGrid(cur, self.schemaSQL)
+            
     def main(self, multipliers=[], overwrite=False):
         with self._connect() as cur:
-            self.retrieveGridDimensions(cur)
-            if not self.hasGridCoordinateFields(cur):
-                self.addCoordinatesToGrid(cur)
             allFeats = self.getFeatureNames(cur)
-            self.createIndices(list(allFeats.keys()))
-            mainfeats, all_todos = self.generateTodoFields(
-                allFeats, multipliers, overwrite=overwrite
-            )
-            for feat, todos in zip(mainfeats, all_todos):
-                if todos:
-                    self.logger.info('calculating neighbourhood from %s', feat)
-                    raster = self.load(cur, feat)
-                    outrasters = []
-                    for mult, outfeat in todos:
-                        self.createField(cur, outfeat, overwrite=overwrite)
-                        self.logger.info('blurring %s with %f multiplier', feat, mult)
-                        outrasters.append((outfeat, self.gaussify(raster, mult)))
-                    self.save(cur, outrasters)
+            multipliersAndNames = self.neighColumnNames(multipliers)
+            for inTable, featName, outTable in self.findTodos(allFeats, overwrite=overwrite):
+                self.logger.info('calculating neighbourhood from %s.%s', inTable, featName)
+                raster = self.load(cur, inTable, featName)
+                outrasters = []
+                for mult, outfeat in multipliersAndNames:
+                    self.logger.info('blurring %s.%s with %f multiplier', inTable, featName, mult)
+                    outrasters.append((outfeat, self.gaussify(raster, mult)))
+                self.save(cur, outTable, outrasters)
+                                        
                         
-    def generateTodoFields(self, allNames, multipliers, overwrite=False):
-        mainfeats = [feat for feat in allNames if feat.startswith('f_')]
-        all_todos = []
-        for feat in mainfeats:
-            all_todos.append([])
-            for mult in multipliers:
-                neighname = self.neighFeatureName(feat, mult)
-                if overwrite or neighname not in allNames:
-                    all_todos[-1].append((mult, neighname))
-        return mainfeats, all_todos
-        
-    def emptyArray(self):
-        return numpy.full(self.shape, numpy.nan)
-    
-    def retrieveGridDimensions(self, cur):
-        qry = sql.SQL('''SELECT
-                min(ST_XMin(geometry)) as xmin,
-                min(ST_YMin(geometry)) as ymin,
-                max(ST_XMin(geometry)) as xmax,
-                max(ST_YMin(geometry)) as ymax,
-                avg(sqrt(ST_Area(geometry))) as cellsize
-            FROM {schema}.grid''').format(schema=self.schemaSQL).as_string(cur)
-        self.logger.info('retrieving grid dimensions')
-        self.logger.debug('retrieving grid dimensions: %s', qry)
-        cur.execute(qry)
-        self.xmin, self.ymin, xmax, ymax, self.cellsize = tuple(cur.fetchone())
-        self.shape = (
-            int(round((xmax - self.xmin) / self.cellsize)) + 1,
-            int(round((ymax - self.ymin) / self.cellsize)) + 1,
-        )
-        self.logger.debug('grid dimensions: %s, starting at (%f;%f), cellsize %f',
-            self.shape, self.xmin, self.ymin, self.cellsize
-        )
+    def findTodos(self, allFeats, overwrite=False):
+        allTables = set(allFeats.keys())
+        for featTable, featColumns in allFeats.items():
+            if not featTable.startswith('feat_neigh_'):
+                todos = []
+                for col in featColumns:
+                    neighTable = self.neighTableName(featTable, col)
+                    if overwrite or neighTable not in allTables:
+                        yield featTable, col, neighTable
             
-    def hasGridCoordinateFields(self, cur):
-        gridfields = self.getGridNames(cur)
-        return 'cell_x' in gridfields and 'cell_y' in gridfields
-        
-    def addCoordinatesToGrid(self, cur):
-        params = dict(
+    def neighTableName(self, tableName, columnName):
+        return 'feat_neigh_{tbl}_{col}'.format(
+            tbl=tableName[5:], # cut the feat_ prefix
+            col=columnName,
         )
-        createQry = sql.SQL('''ALTER TABLE {schema}.grid
-            ADD COLUMN cell_x double precision,
-            ADD COLUMN cell_y double precision
-        ''').format(schema=self.schemaSQL).as_string(cur)
-        self.logger.info('adding coordinate fields to grid')
-        self.logger.debug('adding coordinate fields to grid: %s', createQry)
-        cur.execute(createQry)
-        computeQry = sql.SQL('''UPDATE {schema}.grid SET 
-            cell_x = cast(round((ST_XMin(geometry) - {xmin}) / {cellsize}) as integer),
-            cell_y = cast(round((ST_YMin(geometry) - {ymin}) / {cellsize}) as integer)
-        ''').format(
-            schema=self.schemaSQL,
-            xmin=sql.Literal(self.xmin),
-            ymin=sql.Literal(self.ymin),
-            cellsize=sql.Literal(self.cellsize),
-        ).as_string(cur)
-        self.logger.debug('computing grid coordinate fields: %s', computeQry)
-        cur.execute(computeQry)
-        
     
-    def load(self, cur, feature):
-        qry = sql.SQL('SELECT cell_x, cell_y, {feature} FROM {schema}.grid').format(
-            feature=sql.Identifier(feature),
-            schema=self.schemaSQL,
-        ).as_string(cur)
-        cur.execute(qry)
-        xs, ys, fs = [
-            numpy.array(list(it), dtype=(float if i == 2 else int))
-            for i, it in enumerate(zip(*cur))
+    def neighColumnNames(self, multipliers):
+        return [
+            (mult, 'neigh_' + self.multiplierSuffix(mult))
+            for mult in multipliers
         ]
-        array = self.emptyArray()
-        array[xs,ys] = fs
-        return array
+    
+    def load(self, cur, table, feature):
+        qry = sql.SQL('SELECT geohash, {feature} FROM {schema}.{table}').format(
+            feature=sql.Identifier(feature),
+            table=sql.Identifier(table),
+            schema=self.schemaSQL,
+        ).as_string(cur)
+        self.logger.debug('loading feature for neighbourhood analysis: %s', qry)
+        cur.execute(qry)
+        return self.locator.raster(cur.fetchall())
             
-    def save(self, cur, outrasters):
-        insertflds = [list(item) for item in zip(*(
-            indexes + (value, )
-            for indexes, value in numpy.ndenumerate(raster)
-            if not numpy.isnan(value)
-        ))]
-        insertQry = sql.SQL('''UPDATE {schema}.grid SET {feature} = value
-            FROM (SELECT 
-                unnest(%s) as x,
-                unnest(%s) as y,
-                unnest(%s) as value
-            ) newvals
-            WHERE {schema}.grid.cell_x = newvals.x AND 
-                {schema}.grid.cell_y = newvals.y
+    def save(self, cur, table, outrasters):
+        fields = (
+            [self.locator.geohashes()] + 
+            [self.locator.insertseq(raster) for name, raster in outrasters]
+        )
+        qry = sql.SQL('''CREATE TABLE {schema}.{table} AS SELECT
+            unnest(%s) AS geohash,
+            {varpart}
         ''').format(
             schema=self.schemaSQL,
-            feature=sql.Identifier(feature),
+            table=sql.Identifier(table),
+            varpart=sql.SQL(',\n').join(
+                sql.SQL(sql.SQL('unnest(%s) AS {name}').format(
+                    name=sql.Identifier(name)
+                ).as_string(cur))
+                for name, raster in outrasters
+            )
         ).as_string(cur)
-        self.logger.debug('inserting field values: %s', feature)
-        cur.execute(insertQry, insertflds)
-          
+        self.logger.debug('creating neighbourhood feature table: %s', qry)
+        cur.execute(qry, fields)
+                      
     def gaussify(self, raster, multiplier):
         mask = numpy.array(~numpy.isnan(raster), dtype=float)
         filtered = scipy.ndimage.gaussian_filter(
@@ -428,8 +383,49 @@ class NeighbourhoodCalculator(Calculator):
         return result
             
     @staticmethod
-    def neighFeatureName(featName, multiplier):
+    def multiplierSuffix(multiplier):
         multpart = str(multiplier).replace('.', '_')
         if multpart.endswith('_0'):
             multpart = multpart[:-2]
-        return 'fn_' + featName[2:] + '_' + multpart
+        return multpart
+
+        
+class CellLocator:
+    def __init__(self, locations):
+        self.locations = locations
+        self.shape = (
+            max(loc[0] for loc in self.locations.values())+1,
+            max(loc[1] for loc in self.locations.values())+1,
+        )
+    
+    def raster(self, records):
+        values = numpy.full(self.shape, numpy.nan)
+        for geohash, value in records:
+            values[self.locations[geohash]] = value
+        return values
+        
+    def geohashes(self):
+        return list(self.locations.keys())
+        
+    def insertseq(self, raster):
+        return [raster[loc] for loc in self.locations.values()]
+    
+    @classmethod
+    def fromGrid(cls, cur, schemaIdent):
+        qry = sql.SQL('''WITH dims AS (
+                SELECT
+                    min(ST_XMin(geometry)) as xmin,
+                    min(ST_YMin(geometry)) as ymin,
+                    avg(sqrt(ST_Area(geometry))) as cellsize
+                FROM {schema}.grid
+            ) SELECT 
+                geohash,
+                cast(round((ST_XMin(geometry) - dims.xmin) / dims.cellsize) as integer) AS cell_x,
+                cast(round((ST_YMin(geometry) - dims.ymin) / dims.cellsize) as integer) AS cell_y
+            FROM {schema}.grid, dims''').format(schema=schemaIdent)
+        cur.execute(qry)
+        locations = {}
+        for geohash, x, y in cur.fetchall():
+            locations[geohash] = (x, y)
+        return cls(locations)
+                
