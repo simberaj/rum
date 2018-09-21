@@ -9,12 +9,19 @@ from . import core
 class Handler(core.DatabaseTask):
     targetType = 'double precision'
 
-    def selectValues(self, cur, fieldnames, inside=False, grid='grid'):
-        qry = sql.SQL('SELECT {fieldnames} FROM {schema}.{grid}{where}').format(
+    def selectValues(self, cur, table, fieldnames, where=None, order=None):
+        qry = sql.SQL('SELECT {fieldnames} FROM {schema}.{table}{where} {order}').format(
             schema=self.schemaSQL,
+            table=sql.Identifier(table),
             fieldnames=sql.SQL(', ').join(sql.Identifier(fn) for fn in fieldnames),
-            where=sql.SQL(' WHERE inside' if inside else ''),
-            grid=sql.Identifier(grid),
+            where=(where if where else sql.SQL('')),
+            order=(
+                sql.SQL('ORDER BY {schema}.{table}.{order}').format(
+                    schema=self.schemaSQL,
+                    table=sql.Identifier(table),
+                    order=sql.Identifier(order),
+                ) if order else sql.SQL('')
+            ),
         ).as_string(cur)
         self.logger.debug('executing select query: %s', qry)
         cur.execute(qry)
@@ -23,9 +30,32 @@ class Handler(core.DatabaseTask):
             cur.fetchall(),
             columns=fieldnames
         )
+        return df
+    
+    def insideCondition(self, table):
+        return sql.SQL('JOIN {schema}.grid g ON {table}.geohash=g.geohash WHERE g.inside').format(
+            schema=self.schemaSQL,
+            table=sql.Identifier(table),
+        )
+    
+    def selectConsolidatedFeatures(self, cur, fieldnames=None, inside=False):
+        df = self.selectValues(cur,
+            'all_feats',
+            fieldnames=fieldnames if fieldnames else self.getConsolidatedFeatureNames(cur),
+            where=self.insideCondition('all_feats') if inside else None,
+            order='geohash'
+        )
         df['intercept'] = 1
         return df
-
+            
+    def selectTarget(self, cur, tablename, inside=False):
+        return self.selectValues(cur,
+            tablename,
+            ['target'],
+            where=self.insideCondition(tablename) if inside else None,
+            order='geohash'
+        )['target']
+    
     
     def createField(self, cur, name, overwrite=False):
         self.createFields(cur, [name], overwrite=overwrite)
@@ -72,11 +102,11 @@ class UniquesGetter:
                 schema=self.schemaSQL,
                 table=self.tableSQL,
                 field=sql.Identifier(field)
-            ).as_string(cur)
+            ).as_string(self.cursor)
             # self.logger.debug('retrieving unique values: %s', uniqueQry)
-            cur.execute(uniqueQry)
+            self.cursor.execute(uniqueQry)
             uniques = list(sorted(
-                row[0] for row in cur.fetchall()
+                row[0] for row in self.cursor.fetchall()
                 if row[0] is not None
             ))
         return uniques if uniques else [None]

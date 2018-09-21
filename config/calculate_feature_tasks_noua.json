@@ -7,42 +7,28 @@
         {
             "table" : "building",
             "method" : "wavg",
-            "field" : "perim_index"
-        },
-        {
-            "table" : "building",
-            "method" : "wavg",
-            "field" : "fullness_index"
-        },
-        {
-            "table" : "building",
-            "method" : "wavg",
-            "field" : "depth_index"
-        },
-        {
-            "table" : "building",
-            "method" : "wavg",
-            "field" : "concavity_index"
-        },
-        {
-            "table" : "building",
-            "method" : "wavg",
-            "field" : "detour_index"
+            "source" : [
+                "perim_index",
+                "fullness_index",
+                "depth_index",
+                "concavity_index",
+                "detour_index"
+            ]
         },
         {
             "table" : "building",
             "method" : "avg",
-            "field" : "area"
+            "source" : "area"
         },
         {
             "table" : "transport",
             "method" : "len",
-            "field" : "class"
+            "case" : "class"
         },
         {
             "table" : "poi",
             "method" : "dens",
-            "field" : "type"
+            "case" : "type"
         }
     ]
 }

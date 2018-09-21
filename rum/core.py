@@ -86,11 +86,12 @@ class Task:
     def run(self, *args, **kwargs):
         self.logger.debug('starting %s', self.logname)
         try:
-            self.main(*args, **kwargs)
+            result = self.main(*args, **kwargs)
         except Exception as exc:
             self.logger.exception(exc)
             raise
         self.logger.debug('successfully finished %s', self.logname)
+        return result
         
     def main(self, *args, **kwargs):
         raise NotImplementedError
@@ -143,10 +144,28 @@ class DatabaseTask(Task):
         cur.execute(qry)
         return [row[0] for row in cur.fetchall()]
         
-    def getGridFeatureNames(self, cur):
-        return self.getGridNames(cur, 
-            where=sql.SQL("column_name LIKE 'f\_%' OR column_name LIKE 'f_\_%'"),
-        )
+    def getFeatureNames(self, cur):
+        qry = sql.SQL('''
+            SELECT table_name, column_name FROM information_schema.columns
+            WHERE table_schema={schema} AND table_name LIKE 'feat_%' AND column_name<>'geohash'
+            ORDER BY table_name, ordinal_position;
+        ''').format(schema=sql.Literal(self.schema)).as_string(cur)
+        self.logger.debug('selecting feature columns: %s', qry)
+        cur.execute(qry)
+        feats = {}
+        for table, column in cur.fetchall():
+            feats.setdefault(table, []).append(column)
+        return feats
+        
+    def getConsolidatedFeatureNames(self, cur):
+        qry = sql.SQL('''
+            SELECT column_name FROM information_schema.columns
+            WHERE table_schema={schema} AND table_name='all_feats' AND column_name<>'geohash'
+            ORDER BY ordinal_position;
+        ''').format(schema=sql.Literal(self.schema)).as_string(cur)
+        self.logger.debug('selecting consolidated feature columns: %s', qry)
+        cur.execute(qry)
+        return [row[0] for row in cur.fetchall()]
    
    
 class Initializer(DatabaseTask):

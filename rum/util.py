@@ -19,7 +19,7 @@ class Recategorizer(core.DatabaseTask):
             ) + self.caseQuery(cur, source, transDict, default, leading)
             self.logger.debug('recategorizing with %s', qry)
             cur.execute(qry)
-        
+
     def loadTranslation(self, transPath):
         with open(transPath, encoding='utf8') as infile:
             transDict = json.load(infile)
@@ -31,7 +31,7 @@ class Recategorizer(core.DatabaseTask):
             )
         else:
             return transDict, PassThrough, False
-        
+
     def createTargetField(self, cur, table, colname, coltype, overwrite):
         opts = dict(
             schema=self.schemaSQL,
@@ -50,7 +50,7 @@ class Recategorizer(core.DatabaseTask):
         ).as_string(cur)
         self.logger.debug('adding recategorized column: %s', qry)
         cur.execute(qry)
-        
+
     def caseQuery(self, cur, column, translation, default=PassThrough, leading=False):
         colSQL = sql.Identifier(column)
         cases = [
@@ -64,8 +64,8 @@ class Recategorizer(core.DatabaseTask):
         ]
         defaultSQL = colSQL if default is PassThrough else sql.Literal(default)
         return (
-            sql.SQL('CASE\n') + 
-            sql.SQL('\n').join(cases) + 
+            sql.SQL('CASE\n') +
+            sql.SQL('\n').join(cases) +
             sql.SQL('\nELSE {} END').format(defaultSQL)
         )
 
@@ -95,43 +95,122 @@ class ShapeCalculator(core.DatabaseTask):
                 for pattern in (self.createSQL, self.computeSQL):
                     qry = sql.SQL(pattern).format(**params).as_string(cur)
                     cur.execute(qry)
-    
+
 class FeatureLister(core.DatabaseTask):
     def main(self):
         with self._connect() as cur:
-            names = self.getGridFeatureNames(cur)
-            if not names:
-                print('*** No feature fields found (or grid or schema missing)')
-            for name in names:
-                print(name)
+            names = self.getFeatureNames(cur)
+            if names:
+                for table, columns in names.items():
+                    print(table)
+                    for column in columns:
+                        print(' ', column)
+                print()
+                print('*** {} features total'.format(
+                    sum(len(columns) for columns in names.values())
+                ))
+            else:
+                print('*** No feature fields found (or schema missing)')
 
-                
+
+class FeatureClearer(core.DatabaseTask):
+    def main(self):
+        with self._connect() as cur:
+            tablenames = list(self.getFeatureNames(cur).keys())
+            self.logger.info('dropping %d tables', len(tablenames))
+            for name in tablenames:
+                cur.execute(
+                    sql.SQL('DROP TABLE {schema}.{name};').format(
+                        schema=self.schemaSQL,
+                        name=sql.Identifier(name),
+                    )
+                )
+
+class FeatureConsolidator(core.DatabaseTask):
+    def main(self, overwrite=False):
+        with self._connect() as cur:
+            if overwrite:
+                self.logger.debug('dropping all_feats table')
+                cur.execute(
+                    sql.SQL('DROP TABLE IF EXISTS {schema}.all_feats;').format(
+                        schema=self.schemaSQL
+                    )
+                )
+            featnames = self.getFeatureNames(cur)
+            qry = self.consolidationQuery(featnames).as_string(cur)
+            self.logger.debug('consolidating features: %s', qry)
+            cur.execute(qry)
+            
+    def consolidationQuery(self, featnames):
+        fieldsSQLs = []
+        tablesSQLs = []
+        for table, columns in featnames.items():
+            tableIdent = sql.Identifier(table)
+            tablePrefix = table[5:]
+            if tablePrefix.startswith('neigh_'):
+                tablePrefix = tablePrefix[6:]
+            for column in columns:
+                fieldsSQLs.append(
+                    sql.SQL('{schema}.{table}.{column} AS {newname}').format(
+                        schema=self.schemaSQL,
+                        table=tableIdent,
+                        column=sql.Identifier(column),
+                        newname=sql.Identifier(tablePrefix + '_' + column)
+                    )
+                )
+            if tablesSQLs:
+                tablesSQLs.append(
+                    sql.SQL('{schema}.{table} ON {schema}.{table}.geohash={first}.geohash').format(
+                        schema=self.schemaSQL,
+                        table=tableIdent,
+                        first=tablesSQLs[0]
+                    )
+                )
+            else:
+                tablesSQLs.append(
+                    sql.SQL('{schema}.{table}').format(
+                        schema=self.schemaSQL,
+                        table=tableIdent,
+                    )
+                )
+        return (
+            sql.SQL('CREATE TABLE {schema}.all_feats AS SELECT {first}.geohash,\n').format(
+                schema=self.schemaSQL,
+                first=tablesSQLs[0]
+            )
+            + sql.SQL(',\n').join(fieldsSQLs)
+            + sql.SQL(' FROM ')
+            + sql.SQL('\nJOIN ').join(tablesSQLs)
+        )
+        
+            
+
 class Disaggregator(core.DatabaseTask):
     disagPattern = sql.SQL('''
-    with fweights as (select 
+    WITH fweights AS (SELECT
         g.geohash,
-        d.geometry as dgeometry,
-        d.{disagField} as dval,
-        g.{weightField} * st_area(st_intersection(g.geometry, d.geometry)) as fweight
-    from {schema}.grid g
-        join {schema}.{disagTable} d on st_intersects(g.geometry, d.geometry)
+        d.geometry AS dgeometry,
+        d.{disagField} AS dval,
+        g.{weightField} * st_area(st_intersection(g.geometry, d.geometry)) AS fweight
+    FROM {schema}.grid g
+        JOIN {schema}.{disagTable} d ON st_intersects(g.geometry, d.geometry)
     ),
-    transfers as (select
-        dgeometry, sum(fweight) as coef
-    from fweights
-    group by dgeometry
+    transfers AS (SELECT
+        dgeometry, sum(fweight) AS coef
+    FROM fweights
+    GROUP BY dgeometry
     ),
-    vals as (select
+    vals AS (SELECT
         fw.geohash, sum(
-            case when t.coef = 0 then 0 else fw.dval * fw.fweight / t.coef end
+            CASE WHEN t.coef = 0 THEN 0 ELSE fw.dval * fw.fweight / t.coef END
         ) as val
-    from fweights fw
-        join transfers t on fw.dgeometry=t.dgeometry
-    group by fw.geohash
+    FROM fweights fw
+        JOIN transfers t ON fw.dgeometry=t.dgeometry
+    GROUP BY fw.geohash
     )
-    update {schema}.grid set {targetField} = val
-    from vals
-    where vals.geohash={schema}.grid.geohash
+    UPDATE {schema}.grid SET {targetField} = val
+    FROM vals
+    WHERE vals.geohash={schema}.grid.geohash
     ''')
 
     def createField(self, cur, name, overwrite=False):
@@ -144,13 +223,13 @@ class Disaggregator(core.DatabaseTask):
         ).as_string(cur)
         self.logger.debug('creating field: %s', name)
         cur.execute(qry)
-        
+
     def main(self, disagTable, disagField, weightField, targetField, relative=False, overwrite=False):
         if relative:
             raise NotImplementedError
         with self._connect() as cur:
             self.disaggregateAbsolute(cur, disagTable, disagField, weightField, targetField, overwrite=overwrite)
-            
+
     def disaggregateAbsolute(self, cur, disagTable, disagField, weightField, targetField, overwrite=False):
         self.createField(cur, targetField, overwrite=overwrite)
         disagQry = self.disagPattern.format(
@@ -162,7 +241,7 @@ class Disaggregator(core.DatabaseTask):
         ).as_string(cur)
         self.logger.debug('disaggregating: %s', disagQry)
         cur.execute(disagQry)
-            
+
 class BatchDisaggregator(Disaggregator):
     def main(self, disagTable, disagField, weightFieldBase, relative=False, overwrite=False):
         if relative:
