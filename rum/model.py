@@ -28,7 +28,7 @@ class Model:
         'extra' : sklearn.ensemble.ExtraTreesRegressor,
         'gboost' : sklearn.ensemble.GradientBoostingRegressor,
     }
-    
+
     def __init__(self, typename, **kwargs):
         self.type = self.TYPES[typename]
         self.typename = typename
@@ -36,32 +36,32 @@ class Model:
         self.regressor = self.type(**kwargs)
         self.featureNames = None
         self.targetName = None
-    
+
     def setFeatureNames(self, names):
         self.featureNames = names
-        
+
     def setTargetName(self, name):
         self.targetName = name
-    
+
     def getFeatureNames(self):
         return self.featureNames
-    
+
     def fit(self, features, target):
         normalized = self.scaler.fit_transform(features)
         self.regressor.fit(normalized, target)
-    
+
     def predict(self, features):
         preds = self.regressor.predict(self.scaler.transform(features))
         preds[preds < 0] = 0
         return preds
-    
+
     def save(self, outfile):
         pickle.dump(self, outfile)
 
 
-        
-        
-class ModelTrainer(field.Handler):        
+
+
+class ModelTrainer(field.Handler):
     def main(self, modeltype, targetName, outpath, **kwargs):
         model = Model(modeltype, **kwargs)
         model.setTargetName(targetName)
@@ -77,7 +77,7 @@ class ModelTrainer(field.Handler):
             self.logger.info('saving model to %s', outpath)
             with open(outpath, 'wb') as outfile:
                 model.save(outfile)
-                
+
     def selectFeaturesAndTarget(self, cur, featureNames, targetName):
         data = self.selectValues(cur, featureNames + [targetName], inside=True)
         targets = data[targetName].values
@@ -85,7 +85,8 @@ class ModelTrainer(field.Handler):
         data.drop(targetName, axis=1, inplace=True)
         data.fillna(0, inplace=True)
         return data.values, targets
-        
+
+
 class ModelArrayTrainer(ModelTrainer):
     def main(self, targetName, outpath, **kwargs):
         if not os.path.isdir(outpath):
@@ -109,11 +110,10 @@ class ModelArrayTrainer(ModelTrainer):
                 )
                 with open(outmodpath, 'wb') as outfile:
                     model.save(outfile)
-                
-        
-        
+
+
 class ModelApplier(field.Handler):
-    def main(self, modelPath, weightField, overwrite=False):
+    def main(self, modelPath, weightTable, overwrite=False):
         self.logger.info('loading models from %s', modelPath)
         with open(modelPath, 'rb') as infile:
             model = pickle.load(infile)
@@ -122,19 +122,16 @@ class ModelApplier(field.Handler):
             features, ids = self.selectFeaturesAndIds(cur, model.getFeatureNames())
             self.logger.info('predicting weights')
             weights = model.predict(features)
-            self.logger.info('serializing weights')
-            tmpTable = self.saveWeights(cur, ids, weights)
-            self.createField(cur, weightField, overwrite=overwrite)
             self.logger.info('saving weights')
-            self.updateWeights(cur, weightField, tmpTable)
-    
+            self.saveWeights(cur, weightTable, ids, weights)
+
     def selectFeaturesAndIds(self, cur, featureNames):
         data = self.selectValues(cur, featureNames + ['geohash'])
         ids = data['geohash'].tolist()
         data.drop('geohash', axis=1, inplace=True)
         data.fillna(0, inplace=True)
         return data.values, ids
-        
+
     def saveWeights(self, cur, ids, weights):
         tmpTableName = core.tmpName()
         tmpTableSQL = sql.Identifier(tmpTableName)
@@ -152,7 +149,7 @@ class ModelApplier(field.Handler):
 
     def updateWeights(self, cur, weightField, tmpTable):
         qry = sql.SQL('''
-            UPDATE {schema}.grid SET {weightField} = (SELECT 
+            UPDATE {schema}.grid SET {weightField} = (SELECT
                 weight FROM {tmpTable}
                 WHERE {tmpTable}.geohash={schema}.grid.geohash)
         ''').format(
@@ -162,7 +159,7 @@ class ModelApplier(field.Handler):
         )
         self.logger.debug('transferring weights: %s', qry)
         cur.execute(qry)
-        
+
 
 class ModelArrayApplier(ModelApplier):
     def main(self, modelDirPath, weightFieldBase, overwrite=False):
@@ -185,7 +182,7 @@ class ModelArrayApplier(ModelApplier):
                     break
             self.createFields(cur, list(sorted(weightFields)))
             self.updateMultipleWeights(cur, ids, weightFields, weightValues)
-            
+
     def updateMultipleWeights(self, cur, ids, weightFields, weightValues):
         namepart = sql.SQL(', ').join([
             sql.SQL('{feat} = {tmpfeat}').format(
@@ -210,7 +207,7 @@ class ModelArrayApplier(ModelApplier):
         ).as_string(cur)
         self.logger.debug('inserting weights: %s', insertQry)
         cur.execute(insertQry, [ids] + weightValues)
-        
+
     def loadModels(self, path):
         self.logger.info('loading models from %s', path)
         for fileName in os.listdir(path):
@@ -220,4 +217,4 @@ class ModelArrayApplier(ModelApplier):
                 yield model
             except pickle.UnpicklingError:
                 pass
-    
+
