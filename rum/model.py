@@ -126,7 +126,7 @@ class ModelApplier(field.Handler):
             self.updateWeights(cur, weightField, tmpTable)
     
     def selectFeaturesAndIds(self, cur, featureNames):
-        data = self.selectValues(cur, featureNames + ['geohash'])
+        data = self.selectConsolidatedFeatures(cur, featureNames)
         ids = data['geohash'].tolist()
         data.drop('geohash', axis=1, inplace=True)
         data.fillna(0, inplace=True)
