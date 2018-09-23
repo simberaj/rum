@@ -45,6 +45,7 @@ class Handler(core.DatabaseTask):
             where=self.insideCondition('all_feats') if inside else None,
             order='geohash'
         )
+        print(df.values.shape)
         df['intercept'] = 1
         return df
             

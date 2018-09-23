@@ -37,7 +37,7 @@ class Calculator(core.DatabaseTask):
     )''')
     SEPARATOR = sql.SQL(',\n        ')
     ALIASER = sql.SQL(' AS ')
-    
+
     def getQuery(self, cur, source, target, partials, finals, temporary=False):
         finalFieldSelect = self.fieldSelect(finals)
         return sql.SQL((
@@ -54,14 +54,14 @@ class Calculator(core.DatabaseTask):
             target=sql.Identifier(target),
             temp=sql.SQL('TEMPORARY ' if temporary else ''),
         )
-    
+
     def partialsFromFinals(self, finexpr):
         partials = []
         for partname, partexpr in PARTIAL_EXPRESSIONS.items():
             if partname in finexpr:
                 partials.append((partname, sql.SQL(partexpr)))
         return partials
-        
+
     def fieldSelect(self, fieldTuples):
         # for ftup in fieldTuples:
             # for item in ftup:
@@ -71,7 +71,7 @@ class Calculator(core.DatabaseTask):
             self.ALIASER.join([expr, sql.Identifier(name)])
             for name, expr in fieldTuples
         )
-    
+
     def calculate(self, cur, table, partials, finals, target=None, overwrite=False, bannedNames=[]):
         if target is None:
             target = '{type}_{table}'.format(
@@ -81,7 +81,7 @@ class Calculator(core.DatabaseTask):
             if not overwrite:
                 target = self.uniqueTableName(cur, target)
             elif target in bannedNames:
-                target = self.uniqueTableName(cur, target, names=bannedNames)            
+                target = self.uniqueTableName(cur, target, names=bannedNames)
         self.logger.info('computing table %s from table %s', target, table)
         targetSQL = sql.Identifier(target)
         qry = self.getQuery(cur, table, target, partials, finals).as_string(cur)
@@ -94,7 +94,7 @@ class Calculator(core.DatabaseTask):
         self.logger.debug('computing table: %s', qry)
         cur.execute(qry)
         return target
-        
+
     def uniqueTableName(self, cur, target, names=[]):
         if names:
             currentNames = [name for name in names if target in name]
@@ -117,7 +117,7 @@ class Calculator(core.DatabaseTask):
             return target + '_{:d}'.format(maxSuffix + 1)
         else:
             return target
-        
+
     def vacuumGrid(self):
         with self._connect(autocommit=True) as cur:
             self.logger.debug('vacuuming grid')
@@ -127,14 +127,14 @@ class Calculator(core.DatabaseTask):
                 )
             )
 
-        
-        
+
+
 class FeatureCalculator(Calculator):
     type = 'feat'
 
     def getSpecifiers(self, cur, table, sourceField):
         return [None]
-                
+
     def main(self, table, methods, sourceFields=None, caseField=None, overwrite=False, bannedNames=[]):
         if sourceFields is None:
             sourceFields = [None]
@@ -163,12 +163,12 @@ class FeatureCalculator(Calculator):
 
     def createDefiners(self, methods):
         return [ExpressionDefiner.create(method) for method in methods]
-            
-               
+
+
 class ExpressionDefiner:
     CASE_PATTERN = sql.SQL('CASE WHEN {caseField}={value} THEN {numerator} ELSE 0 END')
     MAIN_PATTERN = sql.SQL('(CASE WHEN {denominator} = 0 THEN 0 ELSE sum({numerator}) / {denominator} END)')
-    
+
     @classmethod
     def create(cls, code):
         try:
@@ -177,7 +177,7 @@ class ExpressionDefiner:
             raise core.InvalidParameterError('invalid method {}, allowed: {}'.format(
                 code, ', '.join(cls.CODES.keys())
             ))
-            
+
     def get(self, uniquesGetter, sourceField=None, caseField=None, targetName=None):
         if targetName is None:
             targetName = self.code
@@ -212,49 +212,49 @@ class ExpressionDefiner:
             for numerator, name in zip(numerators, names)
         ]
 
-        
-        
+
+
 class DensityDefiner(ExpressionDefiner):
     code = 'dens'
     numerator = '1'
     denominator = 'sum(aux_cell_area)'
-           
+
 class LengthDefiner(ExpressionDefiner):
     code = 'len'
     numerator = 'aux_common_length'
     denominator = 'sum(aux_cell_area)'
-           
+
 class CoverageDefiner(ExpressionDefiner):
     code = 'cov'
     numerator = 'aux_common_area'
     denominator = 'sum(aux_cell_area)'
-    
+
 class SumDefiner(ExpressionDefiner):
     code = 'sum'
     numerator = '{field}'
     denominator = '1'
-            
+
 class AverageDefiner(ExpressionDefiner):
     code = 'avg'
     numerator = '{field}'
     denominator = 'count(1)'
-            
+
 class WeightedAverageDefiner(ExpressionDefiner):
     code = 'wavg'
     numerator = '{field} * aux_item_area'
     denominator = 'sum(aux_item_area)'
-    
+
 class DistributedSumDefiner(ExpressionDefiner):
     code = 'dsum'
     numerator = '{field} * aux_common_area / aux_item_area'
     denominator = '1'
-        
+
 class DistributedAverageDefiner(ExpressionDefiner):
     code = 'davg'
     numerator = '{field} * aux_common_area'
     denominator = 'sum(aux_common_area)'
-        
-        
+
+
 ExpressionDefiner.CODES = {calc.code : calc for calc in [
     DensityDefiner,
     LengthDefiner,
@@ -275,7 +275,7 @@ class TargetCalculator(Calculator):
         ('POLYGON', False) : DistributedSumDefiner,
         ('POLYGON', True) : DistributedAverageDefiner,
     }
-    
+
     def main(self, table, sourceField, relative=False, overwrite=False):
         with self._connect() as cur:
             definer = self.DEFINERS[self.getGeometryType(cur, table), relative]()
@@ -285,7 +285,7 @@ class TargetCalculator(Calculator):
             print(partials)
             print(finals)
             self.calculate(cur, table, partials, finals, overwrite=overwrite)
-                    
+
     def getGeometryType(self, cur, table):
         qry = sql.SQL('''SELECT type FROM geometry_columns
             WHERE f_table_schema={schema}
@@ -304,13 +304,13 @@ class TargetCalculator(Calculator):
             geomtype = geomtype[5:]
         return geomtype
 
-        
+
 class NeighbourhoodCalculator(Calculator):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         with self._connect() as cur:
             self.locator = CellLocator.fromGrid(cur, self.schemaSQL)
-            
+
     def main(self, multipliers=[], overwrite=False):
         with self._connect() as cur:
             allFeats = self.getFeatureNames(cur)
@@ -323,8 +323,8 @@ class NeighbourhoodCalculator(Calculator):
                     self.logger.info('blurring %s.%s with %f multiplier', inTable, featName, mult)
                     outrasters.append((outfeat, self.gaussify(raster, mult)))
                 self.save(cur, outTable, outrasters)
-                                        
-                        
+
+
     def findTodos(self, allFeats, overwrite=False):
         allTables = set(allFeats.keys())
         for featTable, featColumns in allFeats.items():
@@ -334,19 +334,19 @@ class NeighbourhoodCalculator(Calculator):
                     neighTable = self.neighTableName(featTable, col)
                     if overwrite or neighTable not in allTables:
                         yield featTable, col, neighTable
-            
+
     def neighTableName(self, tableName, columnName):
         return 'feat_neigh_{tbl}_{col}'.format(
             tbl=tableName[5:], # cut the feat_ prefix
             col=columnName,
         )
-    
+
     def neighColumnNames(self, multipliers):
         return [
             (mult, 'neigh_' + self.multiplierSuffix(mult))
             for mult in multipliers
         ]
-    
+
     def load(self, cur, table, feature):
         qry = sql.SQL('SELECT geohash, {feature} FROM {schema}.{table}').format(
             feature=sql.Identifier(feature),
@@ -356,10 +356,10 @@ class NeighbourhoodCalculator(Calculator):
         self.logger.debug('loading feature for neighbourhood analysis: %s', qry)
         cur.execute(qry)
         return self.locator.raster(cur.fetchall())
-            
+
     def save(self, cur, table, outrasters):
         fields = (
-            [self.locator.geohashes()] + 
+            [self.locator.geohashes()] +
             [self.locator.insertseq(raster) for name, raster in outrasters]
         )
         qry = sql.SQL('''CREATE TABLE {schema}.{table} AS SELECT
@@ -377,7 +377,7 @@ class NeighbourhoodCalculator(Calculator):
         ).as_string(cur)
         self.logger.debug('creating neighbourhood feature table: %s', qry)
         cur.execute(qry, fields)
-                      
+
     def gaussify(self, raster, multiplier):
         mask = numpy.array(~numpy.isnan(raster), dtype=float)
         filtered = scipy.ndimage.gaussian_filter(
@@ -388,7 +388,7 @@ class NeighbourhoodCalculator(Calculator):
         result = filtered / coefmask * numpy.where(mask, 1, numpy.nan)
         numpy.seterr(**oldset)
         return result
-            
+
     @staticmethod
     def multiplierSuffix(multiplier):
         multpart = str(multiplier).replace('.', '_')
@@ -396,7 +396,7 @@ class NeighbourhoodCalculator(Calculator):
             multpart = multpart[:-2]
         return multpart
 
-        
+
 class CellLocator:
     def __init__(self, locations):
         self.locations = locations
@@ -404,19 +404,19 @@ class CellLocator:
             max(loc[0] for loc in self.locations.values())+1,
             max(loc[1] for loc in self.locations.values())+1,
         )
-    
+
     def raster(self, records):
         values = numpy.full(self.shape, numpy.nan)
         for geohash, value in records:
             values[self.locations[geohash]] = value
         return values
-        
+
     def geohashes(self):
         return list(self.locations.keys())
-        
+
     def insertseq(self, raster):
         return [raster[loc] for loc in self.locations.values()]
-    
+
     @classmethod
     def fromGrid(cls, cur, schemaIdent):
         qry = sql.SQL('''WITH dims AS (
@@ -425,7 +425,7 @@ class CellLocator:
                     min(ST_YMin(geometry)) as ymin,
                     avg(sqrt(ST_Area(geometry))) as cellsize
                 FROM {schema}.grid
-            ) SELECT 
+            ) SELECT
                 geohash,
                 cast(round((ST_XMin(geometry) - dims.xmin) / dims.cellsize) as integer) AS cell_x,
                 cast(round((ST_YMin(geometry) - dims.ymin) / dims.cellsize) as integer) AS cell_y
@@ -435,4 +435,3 @@ class CellLocator:
         for geohash, x, y in cur.fetchall():
             locations[geohash] = (x, y)
         return cls(locations)
-                

@@ -58,8 +58,8 @@ class Model:
     def save(self, outfile):
         pickle.dump(self, outfile)
 
-        
-class ModelTrainer(field.Handler):        
+
+class ModelTrainer(field.Handler):
     def main(self, modeltype, targetTable, outpath, **kwargs):
         model = Model(modeltype, **kwargs)
         model.setTargetName(targetTable[4:])
@@ -69,18 +69,24 @@ class ModelTrainer(field.Handler):
             self.logger.info('selecting training values')
             features, target = self.selectFeaturesAndTarget(cur, featureNames, targetTable)
             self.logger.info('training model')
+            print(features[:,:3])
+            print(target)
             model.fit(features, target)
             self.logger.info('saving model to %s', outpath)
             with open(outpath, 'wb') as outfile:
                 model.save(outfile)
-                
+
     def selectFeaturesAndTarget(self, cur, featureNames, targetTable):
         return (
-            self.selectConsolidatedFeatures(cur, featureNames, inside=True).fillna(0).values,
-            self.selectTarget(cur, targetTable, inside=True).fillna(0).values
+            self.selectConsolidatedFeatures(cur, featureNames, 
+                # inside=True
+            ).fillna(0).values,
+            self.selectTarget(cur, targetTable,
+                # inside=True
+            ).fillna(0).values
         )
 
-        
+
 class ModelArrayTrainer(ModelTrainer):
     def main(self, targetTable, outpath, **kwargs):
         if not os.path.isdir(outpath):
@@ -111,32 +117,39 @@ class ModelApplier(field.Handler):
         self.logger.info('loading models from %s', modelPath)
         with open(modelPath, 'rb') as infile:
             model = pickle.load(infile)
+        # print(model.getFeatureNames())
         with self._connect() as cur:
             self.logger.info('selecting features')
             features, ids = self.selectFeaturesAndIds(cur, model.getFeatureNames())
             self.logger.info('predicting weights')
             weights = model.predict(features)
             self.logger.info('saving weights')
-            self.saveWeights(cur, weightTable, ids, weights)
+            self.saveWeights(cur, weightTable, ids, weights, overwrite=overwrite)
 
     def selectFeaturesAndIds(self, cur, featureNames):
-        data = self.selectConsolidatedFeatures(cur, featureNames)
+        data = self.selectConsolidatedFeatures(cur, featureNames + ['geohash'])
         ids = data['geohash'].tolist()
         data.drop('geohash', axis=1, inplace=True)
         data.fillna(0, inplace=True)
         return data.values, ids
 
-    def saveWeights(self, cur, weightTable, ids, weights):
-        weightTable = core.tmpName()
-        weightTableSQL = sql.Identifier(weightTable)
-        createQry = sql.SQL('''CREATE TEMPORARY TABLE {name} (
+    def saveWeights(self, cur, weightTable, ids, weights, overwrite=False):
+        params = {
+            'schema' : self.schemaSQL,
+            'name' : sql.Identifier(weightTable)
+        }
+        if overwrite:
+            dropqry = sql.SQL('DROP TABLE IF EXISTS {schema}.{name};').format(**params)
+            self.logger.debug('dropping table: %s', dropqry)
+            cur.execute(dropqry)
+        createQry = sql.SQL('''CREATE TABLE {schema}.{name} (
             geohash text, weight double precision
-        )''').format(name=weightTableSQL).as_string(cur)
+        )''').format(**params).as_string(cur)
         self.logger.debug('creating weight table: %s', createQry)
         cur.execute(createQry)
         insertQry = sql.SQL(
-            'INSERT INTO {name} VALUES (%s, %s)'
-        ).format(name=weightTableSQL).as_string(cur)
+            'INSERT INTO {schema}.{name} VALUES (%s, %s)'
+        ).format(**params).as_string(cur)
         self.logger.debug('inserting weights: %s', insertQry)
         psycopg2.extras.execute_batch(cur, insertQry, zip(ids, weights))
 
@@ -155,51 +168,75 @@ class ModelApplier(field.Handler):
 
 
 class ModelArrayApplier(ModelApplier):
-    def main(self, modelDirPath, weightFieldBase, overwrite=False):
+    def main(self, modelDirPath, weightTable, overwrite=False):
         with self._connect() as cur:
             modelIter = self.loadModels(modelDirPath)
             self.logger.info('selecting features')
             model = next(modelIter)
             features, ids = self.selectFeaturesAndIds(cur, model.getFeatureNames())
             weightFields = []
-            weightValues = []
+            weightValues = [numpy.array(ids)]
             while True:
                 self.logger.info('running %s', model.typename)
-                weightField = '{}_{}'.format(weightFieldBase, model.typename)
+                weightField = 'weight_{}'.format(model.typename)
                 weights = model.predict(features)
                 weightFields.append(weightField)
-                weightValues.append(weights.tolist())
+                weightValues.append(weights)
                 try:
                     model = next(modelIter)
                 except StopIteration:
                     break
-            self.createFields(cur, list(sorted(weightFields)))
-            self.updateMultipleWeights(cur, ids, weightFields, weightValues)
+            self.saveMultipleWeights(
+                cur, weightTable, weightFields, weightValues
+            )
 
-    def updateMultipleWeights(self, cur, ids, weightFields, weightValues):
-        namepart = sql.SQL(', ').join([
-            sql.SQL('{feat} = {tmpfeat}').format(
-                feat=sql.Identifier(feat),
-                tmpfeat=sql.Identifier('tmp_' + feat)
-            )
-            for feat in weightFields
-        ])
-        valpart = sql.SQL(', ').join([
-            sql.SQL('unnest(%s) as {tmpfeat}').format(
-                tmpfeat=sql.Identifier('tmp_' + feat)
-            )
-            for feat in weightFields
-        ])
-        insertQry = sql.SQL('''UPDATE {schema}.grid SET {namepart}
-            FROM (SELECT unnest(%s) as geohash, {valpart}) newvals
-            WHERE {schema}.grid.geohash = newvals.geohash
-        ''').format(
-            schema=self.schemaSQL,
-            namepart=namepart,
-            valpart=valpart
+
+    def saveMultipleWeights(self, cur, table, fields, values):
+        params = {
+            'schema' : self.schemaSQL,
+            'table' : sql.Identifier(table)
+        }
+        createQry = (
+            sql.SQL('CREATE TABLE {schema}.{table} (geohash text, ').format(**params)
+            + sql.SQL(' double precision, ').join([sql.Identifier(fld) for fld in fields])
+            + sql.SQL(' double precision)')
+        ).as_string(cur)
+        self.logger.info('creating weight table %s', table)
+        self.logger.debug('creating weight table: %s', createQry)
+        cur.execute(createQry)
+        insertQry = (
+            sql.SQL('INSERT INTO {schema}.{table} VALUES (').format(**params)
+            + sql.SQL(', ').join([sql.SQL('%s')] * (len(fields) + 1))
+            + sql.SQL(')')
         ).as_string(cur)
         self.logger.debug('inserting weights: %s', insertQry)
-        cur.execute(insertQry, [ids] + weightValues)
+        psycopg2.extras.execute_batch(cur, insertQry, list(zip(*values)))
+
+        
+    # def updateMultipleWeights(self, cur, ids, weightFields, weightValues):
+        # namepart = sql.SQL(', ').join([
+            # sql.SQL('{feat} = {tmpfeat}').format(
+                # feat=sql.Identifier(feat),
+                # tmpfeat=sql.Identifier('tmp_' + feat)
+            # )
+            # for feat in weightFields
+        # ])
+        # valpart = sql.SQL(', ').join([
+            # sql.SQL('unnest(%s) as {tmpfeat}').format(
+                # tmpfeat=sql.Identifier('tmp_' + feat)
+            # )
+            # for feat in weightFields
+        # ])
+        # insertQry = sql.SQL('''UPDATE {schema}.grid SET {namepart}
+            # FROM (SELECT unnest(%s) as geohash, {valpart}) newvals
+            # WHERE {schema}.grid.geohash = newvals.geohash
+        # ''').format(
+            # schema=self.schemaSQL,
+            # namepart=namepart,
+            # valpart=valpart
+        # ).as_string(cur)
+        # self.logger.debug('inserting weights: %s', insertQry)
+        # cur.execute(insertQry, [ids] + weightValues)
 
     def loadModels(self, path):
         self.logger.info('loading models from %s', path)
