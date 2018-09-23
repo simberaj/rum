@@ -126,33 +126,32 @@ class ModelApplier(field.Handler):
         data.fillna(0, inplace=True)
         return data.values, ids
 
-    def saveWeights(self, cur, ids, weights):
-        tmpTableName = core.tmpName()
-        tmpTableSQL = sql.Identifier(tmpTableName)
+    def saveWeights(self, cur, weightTable, ids, weights):
+        weightTable = core.tmpName()
+        weightTableSQL = sql.Identifier(weightTable)
         createQry = sql.SQL('''CREATE TEMPORARY TABLE {name} (
             geohash text, weight double precision
-        )''').format(name=tmpTableSQL).as_string(cur)
+        )''').format(name=weightTableSQL).as_string(cur)
         self.logger.debug('creating weight table: %s', createQry)
         cur.execute(createQry)
         insertQry = sql.SQL(
             'INSERT INTO {name} VALUES (%s, %s)'
-        ).format(name=tmpTableSQL).as_string(cur)
+        ).format(name=weightTableSQL).as_string(cur)
         self.logger.debug('inserting weights: %s', insertQry)
         psycopg2.extras.execute_batch(cur, insertQry, zip(ids, weights))
-        return tmpTableName
 
-    def updateWeights(self, cur, weightField, tmpTable):
-        qry = sql.SQL('''
-            UPDATE {schema}.grid SET {weightField} = (SELECT
-                weight FROM {tmpTable}
-                WHERE {tmpTable}.geohash={schema}.grid.geohash)
-        ''').format(
-            schema=self.schemaSQL,
-            weightField=sql.Identifier(weightField),
-            tmpTable=sql.Identifier(tmpTable)
-        )
-        self.logger.debug('transferring weights: %s', qry)
-        cur.execute(qry)
+    # def updateWeights(self, cur, weightField, tmpTable):
+        # qry = sql.SQL('''
+            # UPDATE {schema}.grid SET {weightField} = (SELECT
+                # weight FROM {tmpTable}
+                # WHERE {tmpTable}.geohash={schema}.grid.geohash)
+        # ''').format(
+            # schema=self.schemaSQL,
+            # weightField=sql.Identifier(weightField),
+            # tmpTable=sql.Identifier(tmpTable)
+        # )
+        # self.logger.debug('transferring weights: %s', qry)
+        # cur.execute(qry)
 
 
 class ModelArrayApplier(ModelApplier):
