@@ -37,7 +37,7 @@ def tmpName():
 
 class Error(Exception):
     pass
-    
+
 class ConfigError(Error):
     pass
 
@@ -55,7 +55,7 @@ class Task:
         self.schema = schema if schema else 'rum'
         self.schemaSQL = sql.Identifier(self.schema)
         self._startLogging()
-    
+
     def _startLogging(self):
         self.logname = 'rum.' + self.__class__.__name__.lower()
         if self.schema:
@@ -78,11 +78,11 @@ class Task:
             self.activeLoggers.append(self.logger)
             self.logger.debug('logging started')
 
-        
+
     @classmethod
     def fromConfig(cls, schema=None):
         return cls(schema=schema)
-        
+
     def run(self, *args, **kwargs):
         self.logger.debug('starting %s', self.logname)
         try:
@@ -92,33 +92,33 @@ class Task:
             raise
         self.logger.debug('successfully finished %s', self.logname)
         return result
-        
+
     def main(self, *args, **kwargs):
         raise NotImplementedError
-        
-        
+
+
 class DatabaseTask(Task):
     def __init__(self, connector, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.connector = connector
         self.connector.logTo(self.logger)
-        
+
     @contextlib.contextmanager
     def _connect(self, autocommit=False):
         with self.connector.connect(autocommit=autocommit) as cursor:
             yield cursor
-            
+
     @classmethod
     def fromArgs(cls, args):
         return cls.fromConfig(
             args.dbconf,
             args.schema if hasattr(args, 'schema') else None
         )
-        
+
     @classmethod
     def fromConfig(cls, connConfig, schema):
         return cls(Connector.fromConfig(connConfig), schema=schema)
-    
+
     def getTableNames(self, cur, where=None):
         qry = sql.SQL('''
             SELECT table_name FROM information_schema.tables
@@ -130,20 +130,24 @@ class DatabaseTask(Task):
         self.logger.debug('selecting grid columns: %s', qry)
         cur.execute(qry)
         return [row[0] for row in cur.fetchall()]
-        
-    def getGridNames(self, cur, where=None):
+
+    def getColumnNames(self, cur, tableName, where=None, exclude=[]):
         qry = sql.SQL('''
             SELECT column_name FROM information_schema.columns
-            WHERE table_schema={schema} AND table_name='grid' AND ({where})
+            WHERE table_schema={schema} AND table_name={table} AND ({where})
             ORDER BY ordinal_position;
         ''').format(
             schema=sql.Literal(self.schema),
+            table=sql.Literal(tableName),
             where=(where if where else sql.SQL('1')),
         ).as_string(cur)
-        self.logger.debug('selecting grid columns: %s', qry)
+        self.logger.debug('selecting columns: %s', qry)
         cur.execute(qry)
-        return [row[0] for row in cur.fetchall()]
-        
+        return [row[0] for row in cur.fetchall() if row[0] not in exclude]
+
+    def getGridNames(self, cur, where=None):
+        return self.getColumnNames(cur, 'grid', where=where)
+
     def getFeatureNames(self, cur):
         qry = sql.SQL('''
             SELECT table_name, column_name FROM information_schema.columns
@@ -156,18 +160,11 @@ class DatabaseTask(Task):
         for table, column in cur.fetchall():
             feats.setdefault(table, []).append(column)
         return feats
-        
+
     def getConsolidatedFeatureNames(self, cur):
-        qry = sql.SQL('''
-            SELECT column_name FROM information_schema.columns
-            WHERE table_schema={schema} AND table_name='all_feats' AND column_name<>'geohash'
-            ORDER BY ordinal_position;
-        ''').format(schema=sql.Literal(self.schema)).as_string(cur)
-        self.logger.debug('selecting consolidated feature columns: %s', qry)
-        cur.execute(qry)
-        return [row[0] for row in cur.fetchall()]
-   
-   
+        return self.getColumnNames(cur, 'all_feats', exclude=['geohash'])
+
+
 class Initializer(DatabaseTask):
     def main(self):
         with self._connect() as cur:
@@ -206,16 +203,16 @@ class ExtentMaker(DatabaseTask):
             self.logger.debug('registering extent geometry: %s', popqry)
             cur.execute(popqry)
 
-            
+
 class GridMaker(DatabaseTask):
     createPattern = sql.SQL('''
         CREATE TABLE {schema}.grid
-            AS (WITH rawgrid AS 
-                (SELECT 
+            AS (WITH rawgrid AS
+                (SELECT
                     makegrid(geometry,{gridSize}) AS geometry
                     FROM {schema}.extent
                 )
-                SELECT 
+                SELECT
                     g.geometry,
                     ST_Within(g.geometry,e.geometry) as inside,
                     reverse(ST_GeoHash(
@@ -226,7 +223,7 @@ class GridMaker(DatabaseTask):
         SELECT Populate_Geometry_Columns('{schema}.grid'::regclass);
         CREATE INDEX {indexName} ON {schema}.grid USING GIST (geometry);
     ''')
-    
+
     def main(self, gridSize=100, overwrite=False):
         with self._connect() as cur:
             indexName = '{}_grid_gix'.format(self.schema)
@@ -247,13 +244,13 @@ class Connector:
     def __init__(self, config):
         self.config = config
         self.logger = EmptyLogger()
-    
+
     def copy(self):
         return self.__class__(self.config.copy())
-    
+
     def logTo(self, logger):
         self.logger = logger
-        
+
     @classmethod
     def fromConfig(cls, config):
         if config is None:
@@ -261,7 +258,7 @@ class Connector:
         if isinstance(config, str):
             config = loadConfig(config)
         return cls(config)
-    
+
     @contextlib.contextmanager
     def connect(self, autocommit=False):
         self.logger.debug('connecting to database %s', self.config.get('dbname'))
@@ -278,22 +275,22 @@ class Connector:
             if not autocommit:
                 self.logger.debug('committing database transaction')
                 self.connection.commit()
-    
-            
+
+
 class EmptyLogger:
     def __bool__(self):
         return False
 
     def info(self, *args, **kwargs):
         pass
-        
+
     def debug(self, *args, **kwargs):
         pass
-        
+
     def warning(self, *args, **kwargs):
         pass
-    
-    
+
+
 def loadConfig(path):
     with open(path, encoding='utf8') as infile:
         return json.load(infile)

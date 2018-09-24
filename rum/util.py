@@ -250,7 +250,7 @@ class BatchDisaggregator(Disaggregator):
         if relative:
             raise NotImplementedError
         with self._connect() as cur:
-            for weightField in self.getNames(cur, weightTable, exclude=['geohash']):
+            for weightField in self.getColumnNames(cur, weightTable, exclude=['geohash']):
                 self.disaggregateAbsolute(
                     cur,
                     disagTable, disagField,
