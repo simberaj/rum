@@ -16,7 +16,7 @@ PARTIAL_EXPRESSIONS = {
     'aux_cell_area' : 'ST_Area({schema}.{table}.geometry)'
 }
 
-class Calculator(core.DatabaseTask):
+class Calculator(field.Handler):
     BASE_LEAD = sql.SQL('''CREATE {temp}TABLE {schema}.{target} AS (
     WITH overlaid AS (
         SELECT
@@ -93,8 +93,9 @@ class Calculator(core.DatabaseTask):
             cur.execute(dropqry)
         self.logger.debug('computing table: %s', qry)
         cur.execute(qry)
+        self.createPrimaryKey(target)
         return target
-
+        
     def uniqueTableName(self, cur, target, names=[]):
         if names:
             currentNames = [name for name in names if target in name]
@@ -377,6 +378,7 @@ class NeighbourhoodCalculator(Calculator):
         ).as_string(cur)
         self.logger.debug('creating neighbourhood feature table: %s', qry)
         cur.execute(qry, fields)
+        self.createPrimaryKey(cur, table)
 
     def gaussify(self, raster, multiplier):
         mask = numpy.array(~numpy.isnan(raster), dtype=float)
