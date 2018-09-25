@@ -87,6 +87,13 @@ class Handler(core.DatabaseTask):
         self.logger.debug('creating fields: %s', creator)
         cur.execute(creator)
     
+    def createPrimaryKey(self, cur, table):
+        qry = sql.SQL(
+            '''ALTER TABLE {} ADD PRIMARY KEY (geohash);'''
+        ).format(sql.Identifier(table)).as_string(cur)
+        self.logger.debug('creating primary key: %s', qry)
+        cur.execute(qry)
+
 
 class UniquesGetter:
     def __init__(self, cursor, schema, table):

@@ -117,8 +117,7 @@ class ModelApplier(field.Handler):
         self.logger.info('loading models from %s', modelPath)
         with open(modelPath, 'rb') as infile:
             model = pickle.load(infile)
-        # print(model.getFeatureNames())
-        with self._connect() as cur:
+       with self._connect() as cur:
             self.logger.info('selecting features')
             features, ids = self.selectFeaturesAndIds(cur, model.getFeatureNames())
             self.logger.info('predicting weights')
@@ -152,6 +151,8 @@ class ModelApplier(field.Handler):
         ).format(**params).as_string(cur)
         self.logger.debug('inserting weights: %s', insertQry)
         psycopg2.extras.execute_batch(cur, insertQry, zip(ids, weights))
+        self.createPrimaryKey(cur, weightTable)
+        
 
     # def updateWeights(self, cur, weightField, tmpTable):
         # qry = sql.SQL('''

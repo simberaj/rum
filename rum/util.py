@@ -140,7 +140,7 @@ class FeatureConsolidator(core.DatabaseTask):
             qry = self.consolidationQuery(featnames).as_string(cur)
             self.logger.debug('consolidating features: %s', qry)
             cur.execute(qry)
-            
+
     def consolidationQuery(self, featnames):
         fieldsSQLs = []
         tablesSQLs = []
@@ -182,8 +182,8 @@ class FeatureConsolidator(core.DatabaseTask):
             + sql.SQL(' FROM ')
             + sql.SQL('\nJOIN ').join(tablesSQLs)
         )
-        
-            
+
+
 
 class Disaggregator(core.DatabaseTask):
     disagPattern = sql.SQL('''
@@ -241,6 +241,7 @@ class Disaggregator(core.DatabaseTask):
         ).as_string(cur)
         self.logger.debug('disaggregating: %s', disagQry)
         cur.execute(disagQry)
+
 
 class BatchDisaggregator(Disaggregator):
     def main(self, disagTable, disagField, weightFieldBase, relative=False, overwrite=False):
