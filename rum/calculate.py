@@ -297,9 +297,6 @@ class TargetCalculator(Calculator):
             definer = self.DEFINERS[self.getGeometryType(cur, table), relative]()
             finals = definer.get(None, sourceField, targetName='target')
             partials = [(sourceField, sql.Identifier(sourceField))]
-            print(table)
-            print(partials)
-            print(finals)
             self.calculate(cur, table, partials, finals, overwrite=overwrite)
 
     def getGeometryType(self, cur, table):

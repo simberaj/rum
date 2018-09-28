@@ -133,44 +133,43 @@ class DatabaseTask(Task):
         self.logger.debug('selecting grid columns: %s', qry)
         cur.execute(qry)
         return [row[0] for row in cur.fetchall()]
-        
-    def getGridNames(self, cur, where=None):
-        qry = sql.SQL('''
-            SELECT column_name FROM information_schema.columns
-            WHERE table_schema={schema} AND table_name='grid' AND ({where})
-            ORDER BY ordinal_position;
-        ''').format(
-            schema=sql.Literal(self.schema),
-            where=(where if where else sql.SQL('1')),
-        ).as_string(cur)
-        self.logger.debug('selecting grid columns: %s', qry)
-        cur.execute(qry)
-        return [row[0] for row in cur.fetchall()]
-        
-    def getFeatureNames(self, cur):
+    
+    def getColumnNames(self, cur, where=None):
         qry = sql.SQL('''
             SELECT table_name, column_name FROM information_schema.columns
-            WHERE table_schema={schema} AND table_name LIKE 'feat_%' AND column_name<>'geohash'
+            WHERE table_schema={schema} AND {where}
             ORDER BY table_name, ordinal_position;
-        ''').format(schema=sql.Literal(self.schema)).as_string(cur)
-        self.logger.debug('selecting feature columns: %s', qry)
+        ''').format(
+            schema=sql.Literal(self.schema),
+            where=where
+        ).as_string(cur)
+        self.logger.debug('selecting columns: %s', qry)
         cur.execute(qry)
-        feats = {}
+        colnames = {}
         for table, column in cur.fetchall():
-            feats.setdefault(table, []).append(column)
-        return feats
+            colnames.setdefault(table, []).append(column)
+        return colnames
+        
+    def getColumnNamesForTable(self, cur, table, where=None):
+        return self.getColumnNames(cur,
+            where=sql.SQL('table_name={table} AND {where}').format(
+                table=sql.Literal(table),
+                where=(where if where else sql.SQL('TRUE'))
+            )
+        ).get(table, [])
+        
+    def getGridNames(self, cur, where=None):
+        return self.getColumnNamesForTable(cur, 'grid', where=None)
+        
+    def getFeatureNames(self, cur):
+        return self.getColumnNames(cur, 
+            where=sql.SQL("table_name LIKE 'feat_%' AND column_name<>'geohash'")
+        )
         
     def getConsolidatedFeatureNames(self, cur, condition=False):
-        qry = sql.SQL('''
-            SELECT column_name FROM information_schema.columns
-            WHERE table_schema={schema} AND table_name='all_feats' AND column_name<>'geohash'
-            ORDER BY ordinal_position;
-        ''').format(schema=sql.Literal(self.schema)).as_string(cur)
-        self.logger.debug('selecting consolidated feature columns: %s', qry)
-        cur.execute(qry)
-        return [
-            row[0] for row in cur.fetchall()
-            if not (row[0] == 'condition' and not condition)
+        return [col 
+            for col in self.getColumnNamesForTable(cur, 'all_feats')
+            if col != 'geohash' and (condition or col != 'condition')
         ]
     
     def clearTable(self, cur, table, overwrite=False):
