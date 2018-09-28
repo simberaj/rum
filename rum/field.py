@@ -6,11 +6,13 @@ import pandas as pd
 
 from . import core
 
+SQL_AND = sql.SQL(' AND ')
+
 class Handler(core.DatabaseTask):
     targetType = 'double precision'
 
     def selectValues(self, cur, table, fieldnames, where=None, order=None):
-        qry = sql.SQL('SELECT {fieldnames} FROM {schema}.{table}{where} {order}').format(
+        qry = sql.SQL('SELECT {fieldnames} FROM {schema}.{table} {where} {order}').format(
             schema=self.schemaSQL,
             table=sql.Identifier(table),
             fieldnames=sql.SQL(', ').join(sql.Identifier(fn) for fn in fieldnames),
@@ -28,48 +30,76 @@ class Handler(core.DatabaseTask):
         self.logger.debug('retrieving data')
         df = pd.DataFrame.from_records(
             cur.fetchall(),
-            columns=fieldnames
+            columns=fieldnames,
+            coerce_float=True
         )
         return df
     
-    def insideCondition(self, table):
-        return sql.SQL('JOIN {schema}.grid g ON {table}.geohash=g.geohash WHERE g.inside').format(
-            schema=self.schemaSQL,
-            table=sql.Identifier(table),
-        )
+    # def insideCondition(self, table):
+        # return sql.SQL('JOIN {schema}.grid g ON {table}.geohash=g.geohash WHERE g.inside').format(
+            # schema=self.schemaSQL,
+            # table=sql.Identifier(table),
+        # )
     
-    def selectConsolidatedFeatures(self, cur, fieldnames=None, inside=False):
+    # def joinConditions(self, conds):
+        # validConds = [cond for cond in conds if cond]
+        # if validConds:
+            # return sql.SQL('WHERE ') + SQL_AND.join(validConds)
+        # else:
+            # return sql.SQL('')
+    
+    def where(self, table, inside=False, condition=True):
+        joins = []
+        conditions = []
+        if inside:
+            joins.append('grid')
+            conditions.append(sql.SQL('{schema}.grid.inside').format(
+                schema=self.schemaSQL
+            ))
+        if condition:
+            if table != 'all_feats':
+                joins.append('all_feats')
+            conditions.append(sql.SQL('{schema}.all_feats.condition').format(
+                schema=self.schemaSQL
+            ))
+        return self.createJoins(table, joins) + self.createConditions(conditions)
+    
+    def createJoins(self, source, joins):
+        return sql.SQL('\n').join([
+            sql.SQL('JOIN {schema}.{join} ON {schema}.{source}.geohash={schema}.{join}.geohash').format(
+                schema=self.schemaSQL,
+                join=sql.Identifier(join),
+                source=sql.Identifier(source),
+            )
+            for join in joins
+        ])
+    
+    def createConditions(self, conditions):
+        if conditions:
+            return sql.SQL(' WHERE ') + SQL_AND.join(conditions)
+        else:
+            return sql.SQL('')
+    
+    def selectConsolidatedFeatures(self, cur, fieldnames=None, **kwargs):
         df = self.selectValues(cur,
             'all_feats',
             fieldnames=fieldnames if fieldnames else self.getConsolidatedFeatureNames(cur),
-            where=self.insideCondition('all_feats') if inside else None,
+            where=self.where('all_feats', **kwargs),
             order='geohash'
         )
-        print(df.values.shape)
         df['intercept'] = 1
         return df
             
-    def selectTarget(self, cur, tablename, inside=False):
+    def selectTarget(self, cur, tablename, **kwargs):
         return self.selectValues(cur,
             tablename,
             ['target'],
-            where=self.insideCondition(tablename) if inside else None,
+            where=self.where(tablename, **kwargs),
             order='geohash'
         )['target']
-    
-    
+        
     def createField(self, cur, name, overwrite=False):
         self.createFields(cur, [name], overwrite=overwrite)
-        # qry = sql.SQL('''ALTER TABLE {schema}.grid
-            # ADD COLUMN {ifnex}{name} {coltype}
-        # ''').format(
-            # schema=self.schemaSQL,
-            # ifnex=sql.SQL('IF NOT EXISTS ' if overwrite else ''),
-            # name=sql.Identifier(name),
-            # coltype=sql.SQL(self.targetType),
-        # ).as_string(cur)
-        # self.logger.debug('creating field: %s', name)
-        # cur.execute(qry)
         
     def createFields(self, cur, names, overwrite=False):
         fieldChunks = [
@@ -89,8 +119,11 @@ class Handler(core.DatabaseTask):
     
     def createPrimaryKey(self, cur, table):
         qry = sql.SQL(
-            '''ALTER TABLE {} ADD PRIMARY KEY (geohash);'''
-        ).format(sql.Identifier(table)).as_string(cur)
+            '''ALTER TABLE {schema}.{table} ADD PRIMARY KEY (geohash);'''
+        ).format(
+            schema=self.schemaSQL,
+            table=sql.Identifier(table)
+        ).as_string(cur)
         self.logger.debug('creating primary key: %s', qry)
         cur.execute(qry)
 

@@ -85,15 +85,10 @@ class Calculator(field.Handler):
         self.logger.info('computing table %s from table %s', target, table)
         targetSQL = sql.Identifier(target)
         qry = self.getQuery(cur, table, target, partials, finals).as_string(cur)
-        if overwrite:
-            dropqry = sql.SQL('DROP TABLE IF EXISTS {schema}.{target}').format(
-                schema=self.schemaSQL, target=targetSQL
-            ).as_string(cur)
-            self.logger.debug('overwriting: %s', dropqry)
-            cur.execute(dropqry)
+        self.clearTable(cur, target, overwrite)
         self.logger.debug('computing table: %s', qry)
         cur.execute(qry)
-        self.createPrimaryKey(target)
+        self.createPrimaryKey(cur, target)
         return target
         
     def uniqueTableName(self, cur, target, names=[]):
@@ -128,6 +123,26 @@ class Calculator(field.Handler):
                 )
             )
 
+            
+class ConditionCalculator(Calculator):
+    def main(self, table, expression, overwrite=False):
+        partials = [('*',
+            sql.SQL('{schema}.{table}.*').format(
+                schema=self.schemaSQL,
+                table=sql.Identifier(table)
+            )
+        )]
+        finals = [('condition',
+            sql.SQL('sum(CASE WHEN {expr} THEN 1 ELSE 0 END) > 0').format(
+                expr=sql.SQL(expression) # TODO any way to sanitize expression?
+            )
+        )]
+        with self._connect() as cur:
+            self.calculate(cur, table,
+                partials, finals,
+                target='condition',
+                overwrite=overwrite
+            )
 
 
 class FeatureCalculator(Calculator):

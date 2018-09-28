@@ -97,20 +97,38 @@ class ShapeCalculator(core.DatabaseTask):
                     cur.execute(qry)
 
 class FeatureLister(core.DatabaseTask):
-    def main(self):
+    def main(self, consolidated=False):
         with self._connect() as cur:
-            names = self.getFeatureNames(cur)
-            if names:
-                for table, columns in names.items():
-                    print(table)
-                    for column in columns:
-                        print(' ', column)
-                print()
-                print('*** {} features total'.format(
-                    sum(len(columns) for columns in names.values())
+            if consolidated:
+                names = self.getConsolidatedFeatureNames(cur, condition=True)
+                if 'condition' in names:
+                    names.remove('condition')
+                    hasCondition = True
+                for name in names:
+                    print(name)
+                namelist = names
+            else:
+                names = self.getFeatureNames(cur)
+                namelist = []
+                hasCondition = True
+                if names:
+                    for table, columns in names.items():
+                        if table == 'condition':
+                            continue
+                        print(table)
+                        for column in columns:
+                            print(' ', column)
+                            namelist.append(column)
+            print()
+            if namelist:
+                print('*** {} {}features total'.format(
+                    len(namelist),
+                    'consolidated ' if consolidated else ''
                 ))
             else:
                 print('*** No feature fields found (or schema missing)')
+            if hasCondition:
+                print('*** Modeling entry condition detected')
 
 
 class FeatureClearer(core.DatabaseTask):
@@ -126,17 +144,13 @@ class FeatureClearer(core.DatabaseTask):
                     )
                 )
 
-class FeatureConsolidator(core.DatabaseTask):
+class FeatureConsolidator(core.DatabaseTask):    
     def main(self, overwrite=False):
         with self._connect() as cur:
-            if overwrite:
-                self.logger.debug('dropping all_feats table')
-                cur.execute(
-                    sql.SQL('DROP TABLE IF EXISTS {schema}.all_feats;').format(
-                        schema=self.schemaSQL
-                    )
-                )
+            self.clearTable(cur, 'all_feats', overwrite)
             featnames = self.getFeatureNames(cur)
+            if self.hasConditionTable(cur):
+                featnames['condition'] = ['condition']
             qry = self.consolidationQuery(featnames).as_string(cur)
             self.logger.debug('consolidating features: %s', qry)
             cur.execute(qry)
@@ -146,16 +160,14 @@ class FeatureConsolidator(core.DatabaseTask):
         tablesSQLs = []
         for table, columns in featnames.items():
             tableIdent = sql.Identifier(table)
-            tablePrefix = table[5:]
-            if tablePrefix.startswith('neigh_'):
-                tablePrefix = tablePrefix[6:]
+            tablePrefix = self.getTablePrefix(table)
             for column in columns:
                 fieldsSQLs.append(
                     sql.SQL('{schema}.{table}.{column} AS {newname}').format(
                         schema=self.schemaSQL,
                         table=tableIdent,
                         column=sql.Identifier(column),
-                        newname=sql.Identifier(tablePrefix + '_' + column)
+                        newname=sql.Identifier(tablePrefix + ('_' + column if column != tablePrefix else ''))
                     )
                 )
             if tablesSQLs:
@@ -182,6 +194,23 @@ class FeatureConsolidator(core.DatabaseTask):
             + sql.SQL(' FROM ')
             + sql.SQL('\nJOIN ').join(tablesSQLs)
         )
+    
+    def getTablePrefix(self, table):
+        for prefix in (core.NEIGHBOUR_FEATURE_PREFIX, core.FEATURE_PREFIX):
+            if table.startswith(prefix):
+                return table[len(prefix):]
+        return table
+
+    def hasConditionTable(self, cur):
+        qry = sql.SQL('''SELECT FROM information_schema.tables
+            WHERE table_schema={schema} AND table_name='condition'
+        ''').format(
+            schema=sql.Literal(self.schema)
+        ).as_string(cur)
+        self.logger.debug('detecting condition table: %s', qry)
+        cur.execute(qry)
+        line = cur.fetchone()
+        return line is not None
 
 
 

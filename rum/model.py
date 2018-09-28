@@ -60,7 +60,9 @@ class Model:
 
 
 class ModelTrainer(field.Handler):
-    def main(self, modeltype, targetTable, outpath, **kwargs):
+    def main(self, modeltype, targetTable, outpath, overwrite=False, **kwargs):
+        if os.path.isfile(outpath) and not overwrite:
+            raise IOError('model file {} already exists'.format(outpath))
         model = Model(modeltype, **kwargs)
         model.setTargetName(targetTable[4:])
         with self._connect() as cur:
@@ -88,7 +90,7 @@ class ModelTrainer(field.Handler):
 
 
 class ModelArrayTrainer(ModelTrainer):
-    def main(self, targetTable, outpath, **kwargs):
+    def main(self, targetTable, outpath, overwrite=False, **kwargs):
         if not os.path.isdir(outpath):
             os.mkdir(outpath)
         with self._connect() as cur:
@@ -101,13 +103,15 @@ class ModelArrayTrainer(ModelTrainer):
             for modeltype in Model.TYPES.keys():
                 model = Model(modeltype, **kwargs)
                 self.logger.info('training %s', model.typename)
-                model.setTargetName(targetTable)
-                model.setFeatureNames(featureNames)
-                model.fit(features, target)
                 outmodpath = os.path.join(
                     outpath,
                     'model_{}.rum'.format(model.typename)
                 )
+                if os.path.isfile(outmodpath) and not overwrite:
+                    raise IOError('model file {} already exists'.format(outmodpath))
+                model.setTargetName(targetTable)
+                model.setFeatureNames(featureNames)
+                model.fit(features, target)
                 with open(outmodpath, 'wb') as outfile:
                     model.save(outfile)
 
@@ -117,7 +121,7 @@ class ModelApplier(field.Handler):
         self.logger.info('loading models from %s', modelPath)
         with open(modelPath, 'rb') as infile:
             model = pickle.load(infile)
-       with self._connect() as cur:
+        with self._connect() as cur:
             self.logger.info('selecting features')
             features, ids = self.selectFeaturesAndIds(cur, model.getFeatureNames())
             self.logger.info('predicting weights')
@@ -137,10 +141,7 @@ class ModelApplier(field.Handler):
             'schema' : self.schemaSQL,
             'name' : sql.Identifier(weightTable)
         }
-        if overwrite:
-            dropqry = sql.SQL('DROP TABLE IF EXISTS {schema}.{name};').format(**params)
-            self.logger.debug('dropping table: %s', dropqry)
-            cur.execute(dropqry)
+        self.clearTable(cur, weightTable, overwrite)
         createQry = sql.SQL('''CREATE TABLE {schema}.{name} (
             geohash text, weight double precision
         )''').format(**params).as_string(cur)
@@ -188,11 +189,12 @@ class ModelArrayApplier(ModelApplier):
                 except StopIteration:
                     break
             self.saveMultipleWeights(
-                cur, weightTable, weightFields, weightValues
+                cur, weightTable, weightFields, weightValues, overwrite=overwrite
             )
 
 
-    def saveMultipleWeights(self, cur, table, fields, values):
+    def saveMultipleWeights(self, cur, table, fields, values, overwrite=False):
+        self.clearTable(cur, table, overwrite)
         params = {
             'schema' : self.schemaSQL,
             'table' : sql.Identifier(table)

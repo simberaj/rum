@@ -120,13 +120,7 @@ class ModelMultiscaleValidator(ModelValidator):
         gridName = 'grid_' + str(multiple).replace('.', '_')
         gridSize = int(baseSize * multiple)
         with self._connect() as cur:
-            if overwrite:
-                dropQry = sql.SQL('DROP TABLE IF EXISTS {schema}.{grid}').format(
-                    schema=self.schemaSQL,
-                    grid=sql.Identifier(gridName)
-                )
-                self.logger.debug('dropping grid: %s', dropQry)
-                cur.execute(dropQry)
+            self.clearTable(cur, gridName, overwrite)
             qry = self.createPattern.format(
                 schema=self.schemaSQL,
                 gridSize=sql.Literal(gridSize),

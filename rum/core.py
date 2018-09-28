@@ -24,6 +24,9 @@ EXTENT_TABLE = 'extent'
 GRID_TABLE = 'grid'
 GEOMETRY_FIELD = 'geometry'
 
+FEATURE_PREFIX = 'feat_'
+NEIGHBOUR_FEATURE_PREFIX = FEATURE_PREFIX + 'neigh_'
+
 TYPES_TO_POSTGRE = {
     str : 'text',
     float : 'double precision',
@@ -157,7 +160,7 @@ class DatabaseTask(Task):
             feats.setdefault(table, []).append(column)
         return feats
         
-    def getConsolidatedFeatureNames(self, cur):
+    def getConsolidatedFeatureNames(self, cur, condition=False):
         qry = sql.SQL('''
             SELECT column_name FROM information_schema.columns
             WHERE table_schema={schema} AND table_name='all_feats' AND column_name<>'geohash'
@@ -165,7 +168,19 @@ class DatabaseTask(Task):
         ''').format(schema=sql.Literal(self.schema)).as_string(cur)
         self.logger.debug('selecting consolidated feature columns: %s', qry)
         cur.execute(qry)
-        return [row[0] for row in cur.fetchall()]
+        return [
+            row[0] for row in cur.fetchall()
+            if not (row[0] == 'condition' and not condition)
+        ]
+    
+    def clearTable(self, cur, table, overwrite=False):
+        if overwrite:
+            qry = sql.SQL('DROP TABLE IF EXISTS {schema}.{table};').format(
+                schema=self.schemaSQL,
+                table=sql.Identifier(table)
+            )
+            self.logger.debug('clearing table %s', table)
+            cur.execute(qry)
    
    
 class Initializer(DatabaseTask):
