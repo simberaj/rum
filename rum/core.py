@@ -128,7 +128,7 @@ class DatabaseTask(Task):
             WHERE table_schema={schema} AND ({where});
         ''').format(
             schema=sql.Literal(self.schema),
-            where=(where if where else sql.SQL('1')),
+            where=(where if where else sql.SQL('TRUE')),
         ).as_string(cur)
         self.logger.debug('selecting grid columns: %s', qry)
         cur.execute(qry)

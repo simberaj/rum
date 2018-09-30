@@ -98,6 +98,7 @@ class ShapeCalculator(core.DatabaseTask):
 
 class FeatureLister(core.DatabaseTask):
     def main(self, consolidated=False):
+        hasCondition = False
         with self._connect() as cur:
             if consolidated:
                 names = self.getConsolidatedFeatureNames(cur, condition=True)
@@ -110,7 +111,6 @@ class FeatureLister(core.DatabaseTask):
             else:
                 names = self.getFeatureNames(cur)
                 namelist = []
-                hasCondition = True
                 if names:
                     for table, columns in names.items():
                         if table == 'condition':
@@ -119,6 +119,7 @@ class FeatureLister(core.DatabaseTask):
                         for column in columns:
                             print(' ', column)
                             namelist.append(column)
+                hasCondition = 'condition' in self.getTableNames(cur)
             print()
             if namelist:
                 print('*** {} {}features total'.format(
