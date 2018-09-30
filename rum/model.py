@@ -1,5 +1,7 @@
 import os
 import pickle
+import gzip
+import operator
 
 import numpy
 import psycopg2.extras
@@ -45,6 +47,9 @@ class Model:
 
     def getFeatureNames(self):
         return self.featureNames
+    
+    def getRegressor(self):
+        return self.regressor
 
     def fit(self, features, target):
         normalized = self.scaler.fit_transform(features)
@@ -56,9 +61,16 @@ class Model:
         return preds
 
     def save(self, outfile):
-        pickle.dump(self, outfile)
+        with gzip.open(outfile, 'wb') as outfileobj:
+            pickle.dump(self, outfileobj)
+    
+    @classmethod
+    def load(cls, infile):
+        with gzip.open(infile, 'rb') as infileobj:
+            return pickle.load(infileobj)
 
 
+    
 class ModelTrainer(field.Handler):
     def main(self, modeltype, targetTable, outpath, overwrite=False, **kwargs):
         if os.path.isfile(outpath) and not overwrite:
@@ -119,8 +131,7 @@ class ModelArrayTrainer(ModelTrainer):
 class ModelApplier(field.Handler):
     def main(self, modelPath, weightTable, overwrite=False):
         self.logger.info('loading models from %s', modelPath)
-        with open(modelPath, 'rb') as infile:
-            model = pickle.load(infile)
+        model = Model.load(modelPath)
         with self._connect() as cur:
             self.logger.info('selecting features')
             features, ids = self.selectFeaturesAndIds(cur, model.getFeatureNames())
@@ -154,20 +165,6 @@ class ModelApplier(field.Handler):
         psycopg2.extras.execute_batch(cur, insertQry, zip(ids, weights))
         self.createPrimaryKey(cur, weightTable)
         
-
-    # def updateWeights(self, cur, weightField, tmpTable):
-        # qry = sql.SQL('''
-            # UPDATE {schema}.grid SET {weightField} = (SELECT
-                # weight FROM {tmpTable}
-                # WHERE {tmpTable}.geohash={schema}.grid.geohash)
-        # ''').format(
-            # schema=self.schemaSQL,
-            # weightField=sql.Identifier(weightField),
-            # tmpTable=sql.Identifier(tmpTable)
-        # )
-        # self.logger.debug('transferring weights: %s', qry)
-        # cur.execute(qry)
-
 
 class ModelArrayApplier(ModelApplier):
     def main(self, modelDirPath, weightTable, overwrite=False):
@@ -245,9 +242,37 @@ class ModelArrayApplier(ModelApplier):
         self.logger.info('loading models from %s', path)
         for fileName in os.listdir(path):
             try:
-                with open(os.path.join(path, fileName), 'rb') as infile:
-                    model = pickle.load(infile)
-                yield model
+                yield Model.load(modelPath)
             except pickle.UnpicklingError:
                 pass
 
+
+class ModelIntrospector(core.Task):
+    ITEMS = [
+        ('feature_importances_', 'feature importances', None),
+        ('coef_', 'coefficients', abs),
+    ]
+
+    def main(self, modelfile):
+        model = Model.load(modelfile)
+        coreModel = model.getRegressor()
+        featnames = model.getFeatureNames()
+        reported = False
+        for attr, name, sorter in self.ITEMS:
+            if hasattr(coreModel, attr):
+                self.report(featnames, getattr(coreModel, attr), name, sorter)
+                reported = True
+        if not reported:
+            print('*** No introspectable attribute found')
+                
+    def report(self, names, values, label, sorter=None):
+        leftcolwidth = min(max(len(name) for name in names) + 1, 60)
+        print('Model', label, '({} features)'.format(len(names)))
+        print()
+        rowiter = sorted(zip(names, values),
+            key=((lambda t: sorter(t[1])) if sorter else operator.itemgetter(1)),
+            reverse=True
+        )
+        for name, value in rowiter:
+            if value:
+                print(name.ljust(leftcolwidth), value)
