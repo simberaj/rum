@@ -217,78 +217,103 @@ class FeatureConsolidator(core.DatabaseTask):
 
 class Disaggregator(core.DatabaseTask):
     disagPattern = sql.SQL('''
-    WITH fweights AS (SELECT
-        g.geohash,
-        d.geometry AS dgeometry,
-        d.{disagField} AS dval,
-        CASE WHEN w.{weightField} IS NULL THEN 0 
-            ELSE w.{weightField} * st_area(st_intersection(g.geometry, d.geometry))
-        END AS fweight
-    FROM {schema}.grid g
-        JOIN {schema}.{disagTable} d ON st_intersects(g.geometry, d.geometry)
-        LEFT JOIN {schema}.{weightTable} w ON g.geohash=w.geohash
-    ),
-    transfers AS (SELECT
-        dgeometry, sum(fweight) AS coef
-    FROM fweights
-    GROUP BY dgeometry
-    ),
-    vals AS (SELECT
-        fw.geohash, sum(
-            CASE WHEN t.coef = 0 THEN 0 ELSE fw.dval * fw.fweight / t.coef END
-        ) as val
-    FROM fweights fw
-        JOIN transfers t ON fw.dgeometry=t.dgeometry
-    GROUP BY fw.geohash
-    )
-    UPDATE {schema}.grid SET {targetField} = val
-    FROM vals
-    WHERE vals.geohash={schema}.grid.geohash
-    ''')
+    CREATE TABLE {schema}.{outputTable} AS (
+        WITH fweights AS (SELECT
+                g.geohash,
+                d.geometry AS dgeometry,
+                d.{disagField} AS dval,
+                CASE WHEN w.{weightField} IS NULL THEN 0 
+                    ELSE w.{weightField} * st_area(st_intersection(g.geometry, d.geometry))
+                END AS fweight
+            FROM {schema}.grid g
+                JOIN {schema}.{disagTable} d ON st_intersects(g.geometry, d.geometry)
+                LEFT JOIN {schema}.{weightTable} w ON g.geohash=w.geohash
+        ),
+        transfers AS (SELECT
+                dgeometry, sum(fweight) AS coef
+            FROM fweights
+            GROUP BY dgeometry
+        )
+        SELECT
+            fw.geohash, sum(
+                CASE WHEN t.coef = 0 THEN 0 ELSE fw.dval * fw.fweight / t.coef END
+            ) as value
+        FROM fweights fw
+            JOIN transfers t ON fw.dgeometry=t.dgeometry
+        GROUP BY fw.geohash
+    )''')
 
-    def createField(self, cur, name, overwrite=False):
-        qry = sql.SQL('''ALTER TABLE {schema}.grid
-            ADD COLUMN {ifnex}{name} double precision
-        ''').format(
-            schema=self.schemaSQL,
-            ifnex=sql.SQL('IF NOT EXISTS ' if overwrite else ''),
-            name=sql.Identifier(name)
-        ).as_string(cur)
-        self.logger.debug('creating field: %s', name)
-        cur.execute(qry)
-
-    def main(self, disagTable, disagField, targetField, weightTable, weightField='weight', relative=False, overwrite=False):
+    def main(self, disagTable, disagField, outputTable, weightTable, weightField='weight', relative=False, overwrite=False):
         if relative:
             raise NotImplementedError
         with self._connect() as cur:
-            self.disaggregateAbsolute(cur, disagTable, disagField, weightTable, weightField, targetField, overwrite=overwrite)
-
-    def disaggregateAbsolute(self, cur, disagTable, disagField, weightTable, weightField, targetField, overwrite=False):
-        self.createField(cur, targetField, overwrite=overwrite)
-        disagQry = self.disagPattern.format(
-            schema=self.schemaSQL,
-            disagTable=sql.Identifier(disagTable),
-            disagField=sql.Identifier(disagField),
-            weightTable=sql.Identifier(weightTable),
-            weightField=sql.Identifier(weightField),
-            targetField=sql.Identifier(targetField),
-        ).as_string(cur)
-        self.logger.debug('disaggregating: %s', disagQry)
-        cur.execute(disagQry)
-
+            self.clearTable(cur, outputTable, overwrite=overwrite)
+            disagQry = self.disagPattern.format(
+                schema=self.schemaSQL,
+                disagTable=sql.Identifier(disagTable),
+                disagField=sql.Identifier(disagField),
+                weightTable=sql.Identifier(weightTable),
+                weightField=sql.Identifier(weightField),
+                outputTable=sql.Identifier(outputTable),
+            ).as_string(cur)
+            self.logger.debug('disaggregating: %s', disagQry)
+            cur.execute(disagQry)
+            
 
 class BatchDisaggregator(Disaggregator):
+    disagPattern = sql.SQL('''
+    CREATE TABLE {schema}.{outputTable} AS (
+        WITH fweights AS (SELECT
+                g.geohash,
+                d.geometry AS dgeometry,
+                d.{disagField} AS dval,
+                {fweights}
+            FROM {schema}.grid g
+                JOIN {schema}.{disagTable} d ON st_intersects(g.geometry, d.geometry)
+                LEFT JOIN {schema}.{weightTable} w ON g.geohash=w.geohash
+        ),
+        transfers AS (SELECT
+                dgeometry,
+                {transfers}
+            FROM fweights
+            GROUP BY dgeometry
+        )
+        SELECT
+            fw.geohash,
+            {finals}
+        FROM fweights fw
+            JOIN transfers t ON fw.dgeometry=t.dgeometry
+        GROUP BY fw.geohash
+    )''')
+    
+    patterns = [
+        ('fweights', sql.SQL('CASE WHEN w.{0} IS NULL THEN 0 ELSE w.{0} * st_area(st_intersection(g.geometry, d.geometry)) END AS fw_{0}')),
+        ('transfers', sql.SQL('sum(fw_{0}) AS coef_{0}')),
+        ('finals', sql.SQL('sum(CASE WHEN t.coef_{0} = 0 THEN 0 ELSE fw.dval * fw.fw_{0} / t.coef_{0} END) as value_{0}')),
+    ]
+    
     def getWeightColumns(self, cur, table):
         return [col for col in self.getColumnNamesForTable(cur, table)
             if col != 'geohash'
         ]
 
-    def main(self, disagTable, disagField, weightTable, relative=False, overwrite=False):
+    def main(self, disagTable, disagField, weightTable, outputTable, relative=False, overwrite=False):
         if relative:
             raise NotImplementedError
         with self._connect() as cur:
-            for weightField in self.getWeightColumns(cur, weightTable):
-                targetField = '{}_disag_{}_{}'.format(disagField, weightTable, weightField)
-                params = [disagTable, disagField, weightTable, weightField, targetField]
-                self.logger.info('disaggregating %s.%s using %s.%s to %s', *params)
-                self.disaggregateAbsolute(cur, *params, overwrite=overwrite)
+            weightCols = self.getWeightColumns(cur, weightTable)
+            params = dict(
+                schema=self.schemaSQL,
+                disagTable=sql.Identifier(disagTable),
+                disagField=sql.Identifier(disagField),
+                weightTable=sql.Identifier(weightTable),
+                outputTable=sql.Identifier(outputTable),
+            )
+            for key, pattern in self.patterns:
+                params[key] = sql.SQL(',\n').join(
+                    pattern.format(col) for col in weightCols
+                )
+            qry = self.disagPattern.format(**params).as_string(cur)
+            self.logger.info('disaggregating by %d fields from %s', len(weightCols), weightTable)
+            self.logger.info('disaggregating batch:', qry)
+            raise RuntimeError
