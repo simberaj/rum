@@ -145,7 +145,12 @@ class FeatureClearer(core.DatabaseTask):
                     )
                 )
 
+<<<<<<< HEAD
 class FeatureConsolidator(core.DatabaseTask):    
+=======
+
+class FeatureConsolidator(core.DatabaseTask):
+>>>>>>> 0418db020ef3100f2e180a462ca5a8d42155279d
     def main(self, overwrite=False):
         with self._connect() as cur:
             self.clearTable(cur, 'all_feats', overwrite)
@@ -215,10 +220,8 @@ class FeatureConsolidator(core.DatabaseTask):
         return line is not None
 
 
-
 class Disaggregator(core.DatabaseTask):
-    disagPattern = sql.SQL('''
-    CREATE TABLE {schema}.{outputTable} AS (
+    disagPattern = sql.SQL('''CREATE TABLE {schema}.{outputTable} AS (
         WITH fweights AS (SELECT
                 g.geohash,
                 d.geometry AS dgeometry,
@@ -259,6 +262,7 @@ class Disaggregator(core.DatabaseTask):
             ).as_string(cur)
             self.logger.debug('disaggregating: %s', disagQry)
             cur.execute(disagQry)
+            self.createPrimaryKey(cur, outputTable)
             
 
 class BatchDisaggregator(Disaggregator):

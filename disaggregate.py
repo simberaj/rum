@@ -1,7 +1,8 @@
 import rum
 import rum.util
 
-DESCRIPTION = '''Disaggregates values from a layer to grid using predicted weights.'''
+DESCRIPTION = '''Disaggregates values from a layer using a given weight table
+to the grid.'''
 
 argparser = rum.defaultArgumentParser(DESCRIPTION)
 argparser.add_argument('disag_table',
