@@ -133,7 +133,6 @@ class DatabaseTask(Task):
         self.logger.debug('selecting grid columns: %s', qry)
         cur.execute(qry)
         return [row[0] for row in cur.fetchall()]
-<<<<<<< HEAD
 
     def getColumnNames(self, cur, where=None):
         qry = sql.SQL('''
