@@ -9,6 +9,8 @@ Chooses an appropriate calculator based on the geometry type of the input table.
 argparser = rum.defaultArgumentParser(DESCRIPTION)
 argparser.add_argument('table', help='calculation source table name')
 argparser.add_argument('source_field', help='source value field for target')
+argparser.add_argument('-n', '--output-name',
+    help='name for output target table (created from source table and value field by default)')
 argparser.add_argument('-r', '--relative', action='store_true',
     help='the values in source field are relative')
 argparser.add_argument('-o', '--overwrite', action='store_true',

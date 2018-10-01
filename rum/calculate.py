@@ -292,12 +292,12 @@ class TargetCalculator(Calculator):
         ('POLYGON', True) : DistributedAverageDefiner,
     }
 
-    def main(self, table, sourceField, relative=False, overwrite=False):
+    def main(self, table, sourceField, target=None, relative=False, overwrite=False):
         with self._connect() as cur:
             definer = self.DEFINERS[self.getGeometryType(cur, table), relative]()
             finals = definer.get(None, sourceField, targetName='target')
             partials = [(sourceField, sql.Identifier(sourceField))]
-            self.calculate(cur, table, partials, finals, overwrite=overwrite)
+            self.calculate(cur, table, partials, finals, target=target, overwrite=overwrite)
 
     def getGeometryType(self, cur, table):
         qry = sql.SQL('''SELECT type FROM geometry_columns
