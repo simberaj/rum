@@ -242,7 +242,7 @@ class ModelArrayApplier(ModelApplier):
         self.logger.info('loading models from %s', path)
         for fileName in os.listdir(path):
             try:
-                yield Model.load(modelPath)
+                yield Model.load(os.path.join(path, fileName))
             except pickle.UnpicklingError:
                 pass
 
