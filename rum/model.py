@@ -47,7 +47,7 @@ class Model:
 
     def getFeatureNames(self):
         return self.featureNames
-    
+
     def getRegressor(self):
         return self.regressor
 
@@ -63,14 +63,14 @@ class Model:
     def save(self, outfile):
         with gzip.open(outfile, 'wb') as outfileobj:
             pickle.dump(self, outfileobj)
-    
+
     @classmethod
     def load(cls, infile):
         with gzip.open(infile, 'rb') as infileobj:
             return pickle.load(infileobj)
 
 
-    
+
 class ModelTrainer(field.Handler):
     def main(self, modeltype, targetTable, outpath, overwrite=False, **kwargs):
         if os.path.isfile(outpath) and not overwrite:
@@ -83,8 +83,6 @@ class ModelTrainer(field.Handler):
             self.logger.info('selecting training values')
             features, target = self.selectFeaturesAndTarget(cur, featureNames, targetTable)
             self.logger.info('training model')
-            print(features[:,:3])
-            print(target)
             model.fit(features, target)
             self.logger.info('saving model to %s', outpath)
             with open(outpath, 'wb') as outfile:
@@ -92,7 +90,7 @@ class ModelTrainer(field.Handler):
 
     def selectFeaturesAndTarget(self, cur, featureNames, targetTable):
         return (
-            self.selectConsolidatedFeatures(cur, featureNames, 
+            self.selectConsolidatedFeatures(cur, featureNames,
                 # inside=True
             ).fillna(0).values,
             self.selectTarget(cur, targetTable,
@@ -164,7 +162,7 @@ class ModelApplier(field.Handler):
         self.logger.debug('inserting weights: %s', insertQry)
         psycopg2.extras.execute_batch(cur, insertQry, zip(ids, weights))
         self.createPrimaryKey(cur, weightTable)
-        
+
 
 class ModelArrayApplier(ModelApplier):
     def main(self, modelDirPath, weightTable, overwrite=False):
@@ -177,7 +175,8 @@ class ModelArrayApplier(ModelApplier):
             weightValues = [numpy.array(ids)]
             while True:
                 self.logger.info('running %s', model.typename)
-                weightField = 'weight_{}'.format(model.typename)
+                # weightField = 'weight_{}'.format(model.typename)
+                weightField = model.typename
                 weights = model.predict(features)
                 weightFields.append(weightField)
                 weightValues.append(weights)
@@ -188,7 +187,6 @@ class ModelArrayApplier(ModelApplier):
             self.saveMultipleWeights(
                 cur, weightTable, weightFields, weightValues, overwrite=overwrite
             )
-
 
     def saveMultipleWeights(self, cur, table, fields, values, overwrite=False):
         self.clearTable(cur, table, overwrite)
@@ -211,32 +209,7 @@ class ModelArrayApplier(ModelApplier):
         ).as_string(cur)
         self.logger.debug('inserting weights: %s', insertQry)
         psycopg2.extras.execute_batch(cur, insertQry, list(zip(*values)))
-
-        
-    # def updateMultipleWeights(self, cur, ids, weightFields, weightValues):
-        # namepart = sql.SQL(', ').join([
-            # sql.SQL('{feat} = {tmpfeat}').format(
-                # feat=sql.Identifier(feat),
-                # tmpfeat=sql.Identifier('tmp_' + feat)
-            # )
-            # for feat in weightFields
-        # ])
-        # valpart = sql.SQL(', ').join([
-            # sql.SQL('unnest(%s) as {tmpfeat}').format(
-                # tmpfeat=sql.Identifier('tmp_' + feat)
-            # )
-            # for feat in weightFields
-        # ])
-        # insertQry = sql.SQL('''UPDATE {schema}.grid SET {namepart}
-            # FROM (SELECT unnest(%s) as geohash, {valpart}) newvals
-            # WHERE {schema}.grid.geohash = newvals.geohash
-        # ''').format(
-            # schema=self.schemaSQL,
-            # namepart=namepart,
-            # valpart=valpart
-        # ).as_string(cur)
-        # self.logger.debug('inserting weights: %s', insertQry)
-        # cur.execute(insertQry, [ids] + weightValues)
+        self.createPrimaryKey(cur, table)
 
     def loadModels(self, path):
         self.logger.info('loading models from %s', path)
@@ -264,7 +237,7 @@ class ModelIntrospector(core.Task):
                 reported = True
         if not reported:
             print('*** No introspectable attribute found')
-                
+
     def report(self, names, values, label, sorter=None):
         leftcolwidth = min(max(len(name) for name in names) + 1, 60)
         print('Model', label, '({} features)'.format(len(names)))

@@ -155,6 +155,7 @@ class FeatureConsolidator(core.DatabaseTask):
             qry = self.consolidationQuery(featnames).as_string(cur)
             self.logger.debug('consolidating features: %s', qry)
             cur.execute(qry)
+            self.createPrimaryKey(cur, 'all_feats')
 
     def consolidationQuery(self, featnames):
         fieldsSQLs = []
@@ -287,9 +288,9 @@ class BatchDisaggregator(Disaggregator):
     )''')
     
     patterns = [
-        ('fweights', sql.SQL('CASE WHEN w.{0} IS NULL THEN 0 ELSE w.{0} * st_area(st_intersection(g.geometry, d.geometry)) END AS fw_{0}')),
-        ('transfers', sql.SQL('sum(fw_{0}) AS coef_{0}')),
-        ('finals', sql.SQL('sum(CASE WHEN t.coef_{0} = 0 THEN 0 ELSE fw.dval * fw.fw_{0} / t.coef_{0} END) as value_{0}')),
+        ('fweights', sql.SQL('CASE WHEN w.{0} IS NULL THEN 0 ELSE w.{0} * st_area(st_intersection(g.geometry, d.geometry)) END AS {0}')),
+        ('transfers', sql.SQL('sum({0}) AS {0}')),
+        ('finals', sql.SQL('sum(CASE WHEN t.{0} = 0 THEN 0 ELSE fw.dval * fw.{0} / t.{0} END) as {0}')),
     ]
     
     def getWeightColumns(self, cur, table):
@@ -302,6 +303,7 @@ class BatchDisaggregator(Disaggregator):
             raise NotImplementedError
         with self._connect() as cur:
             weightCols = self.getWeightColumns(cur, weightTable)
+            self.logger.info('disaggregating by %d fields from %s', len(weightCols), weightTable)
             params = dict(
                 schema=self.schemaSQL,
                 disagTable=sql.Identifier(disagTable),
@@ -311,9 +313,9 @@ class BatchDisaggregator(Disaggregator):
             )
             for key, pattern in self.patterns:
                 params[key] = sql.SQL(',\n').join(
-                    pattern.format(col) for col in weightCols
+                    pattern.format(sql.Identifier(col)) for col in weightCols
                 )
             qry = self.disagPattern.format(**params).as_string(cur)
-            self.logger.info('disaggregating by %d fields from %s', len(weightCols), weightTable)
-            self.logger.info('disaggregating batch:', qry)
-            raise RuntimeError
+            self.logger.debug('disaggregating batch: %s', qry)
+            cur.execute(qry)
+            self.createPrimaryKey(cur, outputTable)
