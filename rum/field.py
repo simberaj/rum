@@ -28,25 +28,15 @@ class Handler(core.DatabaseTask):
         self.logger.debug('executing select query: %s', qry)
         cur.execute(qry)
         self.logger.debug('retrieving data')
-        df = pd.DataFrame.from_records(
+        return self.resultToDF(cur, fieldnames)
+    
+    @staticmethod
+    def resultToDF(cur, fieldnames):
+        return pd.DataFrame.from_records(
             cur.fetchall(),
             columns=fieldnames,
             coerce_float=True
         )
-        return df
-    
-    # def insideCondition(self, table):
-        # return sql.SQL('JOIN {schema}.grid g ON {table}.geohash=g.geohash WHERE g.inside').format(
-            # schema=self.schemaSQL,
-            # table=sql.Identifier(table),
-        # )
-    
-    # def joinConditions(self, conds):
-        # validConds = [cond for cond in conds if cond]
-        # if validConds:
-            # return sql.SQL('WHERE ') + SQL_AND.join(validConds)
-        # else:
-            # return sql.SQL('')
     
     def where(self, table, inside=False, condition=True):
         joins = []
