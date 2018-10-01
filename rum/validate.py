@@ -11,33 +11,53 @@ from . import field, html
 
 
 class ModelValidator(field.Handler):
-    def main(self, trueField, modelField, reportPath=None, grid='grid'):
+    def main(self, trueTable, modelTable, trueField='target', modelField='value', reportPath=None):
         with self._connect() as cur:
-            data = self.selectValues(cur, [trueField, modelField], grid=grid).fillna(0)
+            data = self.select(cur, trueTable, modelTable, trueField, [modelField])
         return self.validate(data, trueField, modelField, reportPath)
-        
+            
+    def select(self, cur, trueTable, modelTable, trueField, modelFields):
+        qry = sql.SQL('''SELECT
+            t.{trueField}, m.{modelFieldSeq}
+        FROM {schema}.grid g
+            LEFT JOIN {schema}.{trueTable} t on g.geohash=t.geohash
+            LEFT JOIN {schema}.{modelTable} m on g.geohash=m.geohash
+        ''').format(
+            schema=self.schemaSQL,
+            trueTable=sql.Identifier(trueTable),
+            modelTable=sql.Identifier(modelTable),
+            trueField=sql.Identifier(trueField),
+            modelFieldSeq=sql.SQL(', m.').join(
+                sql.Identifier(fld) for fld in modelFields
+            ),
+        ).as_string(cur)
+        self.logger.debug('selecting validation data: %s', qry)
+        cur.execute(qry)
+        return self.resultToDF(cur, [trueField] + modelFields).fillna(0)
+    
     @staticmethod
     def validate(data, trueField, modelField, reportPath):
         models = data[modelField].values
         trues = data[trueField].values
         validator = Validator(models, trues)
-        results = validator.validate()
-        for ind, val in results.items():
+        validator.validate()
+        for ind, val in validator.results.items():
             print(ind.ljust(7), val)
         if reportPath:
             validator.output(reportPath)
-        return results
+        return validator.results
         
         
 class ModelArrayValidator(ModelValidator):
-    def main(self, trueField, modelFieldBase, reportPath=None, grid='grid'):
+    def main(self, trueTable, modelTable, trueField='target', reportPath=None):
         with self._connect() as cur:
-            allFields = self.getGridNames(cur)
-            modelFields = [
-                field for field in allFields
-                if field.startswith(modelFieldBase)
-            ]
-            data = self.selectValues(cur, [trueField] + modelFields, grid=grid).fillna(0)
+            modelFields = self.getColumnNamesForTable(cur, modelTable)
+            if 'geohash' in modelFields:
+                modelFields.remove('geohash')
+            data = self.select(cur, trueTable, modelTable, trueField, modelFields)
+        if reportPath and not os.path.isdir(reportPath):
+            self.logger.debug('creating report directory: %s', reportPath)
+            os.mkdir(reportPath)
         results = {}
         for modelField in modelFields:
             print('Validation of', modelField)
@@ -184,14 +204,16 @@ class Validator:
         self.rtae = self.tae / self.realSum
         self.r2 = 1 - self.sqResidSum / ((self.reals - self.realMean) ** 2).sum()
         self.rmse = math.sqrt(self.sqResidSum / len(self.reals))
-        indicatorDict = {
+    
+    @property
+    def results(self):
+        return {
             'DIFF' : self.mismatch,
             'TAE' : self.tae,
             'RTAE' : self.rtae,
             'R2' : self.r2,
             'RMSE' : self.rmse,
         }
-        return indicatorDict
   
     def describe(self, data):
         return {
