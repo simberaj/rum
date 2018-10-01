@@ -181,6 +181,16 @@ class DatabaseTask(Task):
             self.logger.debug('clearing table %s', table)
             cur.execute(qry)
    
+    def createPrimaryKey(self, cur, table):
+        qry = sql.SQL(
+            '''ALTER TABLE {schema}.{table} ADD PRIMARY KEY (geohash);'''
+        ).format(
+            schema=self.schemaSQL,
+            table=sql.Identifier(table)
+        ).as_string(cur)
+        self.logger.debug('creating primary key: %s', qry)
+        cur.execute(qry)
+
    
 class Initializer(DatabaseTask):
     def main(self):
@@ -244,10 +254,7 @@ class GridMaker(DatabaseTask):
     def main(self, gridSize=100, overwrite=False):
         with self._connect() as cur:
             indexName = '{}_grid_gix'.format(self.schema)
-            if overwrite:
-                dropQry = sql.SQL('DROP TABLE IF EXISTS {}.grid').format(self.schemaSQL)
-                self.logger.debug('dropping grid: %s', dropQry)
-                cur.execute(dropQry)
+            self.clearTable(cur, 'grid', overwrite=overwrite)
             qry = self.createPattern.format(
                 schema=self.schemaSQL,
                 indexName=sql.Identifier(indexName),
@@ -255,6 +262,7 @@ class GridMaker(DatabaseTask):
             ).as_string(cur)
             self.logger.debug('grid create query: %s', qry)
             cur.execute(qry)
+            self.createPrimaryKey(cur, 'grid')
 
 
 class Connector:
