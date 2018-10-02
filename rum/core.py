@@ -236,7 +236,7 @@ class GridMaker(DatabaseTask):
         CREATE TABLE {schema}.grid
             AS (WITH rawgrid AS
                 (SELECT
-                    makegrid(geometry,{gridSize}) AS geometry
+                    makegrid(geometry,{gridSize},{xoffset},{yoffset}) AS geometry
                     FROM {schema}.extent
                 )
                 SELECT
@@ -251,7 +251,7 @@ class GridMaker(DatabaseTask):
         CREATE INDEX {indexName} ON {schema}.grid USING GIST (geometry);
     ''')
 
-    def main(self, gridSize=100, overwrite=False):
+    def main(self, gridSize=100, xoffset=0, yoffset=0, overwrite=False):
         with self._connect() as cur:
             indexName = '{}_grid_gix'.format(self.schema)
             self.clearTable(cur, 'grid', overwrite=overwrite)
@@ -259,6 +259,8 @@ class GridMaker(DatabaseTask):
                 schema=self.schemaSQL,
                 indexName=sql.Identifier(indexName),
                 gridSize=sql.Literal(gridSize),
+                xoffset=sql.Literal(xoffset),
+                yoffset=sql.Literal(yoffset),
             ).as_string(cur)
             self.logger.debug('grid create query: %s', qry)
             cur.execute(qry)
