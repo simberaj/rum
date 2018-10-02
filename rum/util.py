@@ -145,12 +145,8 @@ class FeatureClearer(core.DatabaseTask):
                     )
                 )
 
-<<<<<<< HEAD
-class FeatureConsolidator(core.DatabaseTask):    
-=======
-
+                
 class FeatureConsolidator(core.DatabaseTask):
->>>>>>> 0418db020ef3100f2e180a462ca5a8d42155279d
     def main(self, overwrite=False):
         with self._connect() as cur:
             self.clearTable(cur, 'all_feats', overwrite)
