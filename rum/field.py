@@ -77,7 +77,6 @@ class Handler(core.DatabaseTask):
             where=self.where('all_feats', **kwargs),
             order='geohash'
         )
-        df['intercept'] = 1
         return df
             
     def selectTarget(self, cur, tablename, **kwargs):

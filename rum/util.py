@@ -145,7 +145,7 @@ class FeatureClearer(core.DatabaseTask):
                     )
                 )
 
-                
+
 class FeatureConsolidator(core.DatabaseTask):
     def main(self, overwrite=False):
         with self._connect() as cur:
@@ -197,7 +197,7 @@ class FeatureConsolidator(core.DatabaseTask):
             + sql.SQL(' FROM ')
             + sql.SQL('\nJOIN ').join(tablesSQLs)
         )
-    
+
     def getTablePrefix(self, table):
         for prefix in (core.NEIGHBOUR_FEATURE_PREFIX, core.FEATURE_PREFIX):
             if table.startswith(prefix):
@@ -216,13 +216,56 @@ class FeatureConsolidator(core.DatabaseTask):
         return line is not None
 
 
+class RawDisaggregator(core.DatabaseTask):
+    disagPattern = sql.SQL('''CREATE TABLE {schema}.{outputTable} AS (
+        WITH fweights AS (SELECT
+                w.geometry AS geometry,
+                d.geometry AS dgeometry,
+                d.{disagField} AS dval,
+                CASE WHEN w.{weightField} IS NULL THEN 0
+                    ELSE w.{weightField} * st_area(st_intersection(w.geometry, d.geometry))
+                END AS fweight
+            FROM {schema}.{weightTable} w
+                JOIN {schema}.{disagTable} d ON st_intersects(w.geometry, d.geometry)
+        ),
+        transfers AS (SELECT
+                dgeometry, sum(fweight) AS coef
+            FROM fweights
+            GROUP BY dgeometry
+        )
+        SELECT
+            fw.geometry, sum(
+                CASE WHEN t.coef = 0 THEN 0 ELSE fw.dval * fw.fweight / t.coef END
+            ) as value
+        FROM fweights fw
+            JOIN transfers t ON fw.dgeometry=t.dgeometry
+        GROUP BY fw.geometry
+    )''')
+
+    def main(self, disagTable, disagField, outputTable, weightTable, weightField, relative=False, overwrite=False):
+        if relative:
+            raise NotImplementedError
+        with self._connect() as cur:
+            self.clearTable(cur, outputTable, overwrite=overwrite)
+            disagQry = self.disagPattern.format(
+                schema=self.schemaSQL,
+                disagTable=sql.Identifier(disagTable),
+                disagField=sql.Identifier(disagField),
+                weightTable=sql.Identifier(weightTable),
+                weightField=sql.Identifier(weightField),
+                outputTable=sql.Identifier(outputTable),
+            ).as_string(cur)
+            self.logger.debug('disaggregating: %s', disagQry)
+            cur.execute(disagQry)
+
+
 class Disaggregator(core.DatabaseTask):
     disagPattern = sql.SQL('''CREATE TABLE {schema}.{outputTable} AS (
         WITH fweights AS (SELECT
                 g.geohash,
                 d.geometry AS dgeometry,
                 d.{disagField} AS dval,
-                CASE WHEN w.{weightField} IS NULL THEN 0 
+                CASE WHEN w.{weightField} IS NULL THEN 0
                     ELSE w.{weightField} * st_area(st_intersection(g.geometry, d.geometry))
                 END AS fweight
             FROM {schema}.grid g
@@ -259,7 +302,7 @@ class Disaggregator(core.DatabaseTask):
             self.logger.debug('disaggregating: %s', disagQry)
             cur.execute(disagQry)
             self.createPrimaryKey(cur, outputTable)
-            
+
 
 class BatchDisaggregator(Disaggregator):
     disagPattern = sql.SQL('''
@@ -286,13 +329,13 @@ class BatchDisaggregator(Disaggregator):
             JOIN transfers t ON fw.dgeometry=t.dgeometry
         GROUP BY fw.geohash
     )''')
-    
+
     patterns = [
         ('fweights', sql.SQL('CASE WHEN w.{0} IS NULL THEN 0 ELSE w.{0} * st_area(st_intersection(g.geometry, d.geometry)) END AS {0}')),
         ('transfers', sql.SQL('sum({0}) AS {0}')),
         ('finals', sql.SQL('sum(CASE WHEN t.{0} = 0 THEN 0 ELSE fw.dval * fw.{0} / t.{0} END) as {0}')),
     ]
-    
+
     def getWeightColumns(self, cur, table):
         return [col for col in self.getColumnNamesForTable(cur, table)
             if col != 'geohash'

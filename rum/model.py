@@ -56,20 +56,23 @@ class Model:
     def setTargetName(self, name):
         self.targetName = name
 
-    def getFeatureNames(self):
-        return self.featureNames
+    def getFeatureNames(self, intercept=False):
+        return self.featureNames + (['intercept'] if intercept else [])
 
     def getRegressor(self):
         return self.regressor
 
     def fit(self, features, target):
-        normalized = self.scaler.fit_transform(features)
+        normalized = self.scaler.fit_transform(self.addIntercept(features))
         self.regressor.fit(normalized, target)
 
     def predict(self, features):
-        preds = self.regressor.predict(self.scaler.transform(features))
+        preds = self.regressor.predict(self.scaler.transform(self.addIntercept(features)))
         preds[preds < 0] = 0
         return preds
+    
+    def addIntercept(self, features):
+        return numpy.hstack((features, numpy.zeros((len(features), 1))))
 
     def save(self, outfile):
         with gzip.open(outfile, 'wb') as outfileobj:
@@ -100,14 +103,9 @@ class ModelTrainer(field.Handler):
                 model.save(outfile)
 
     def selectFeaturesAndTarget(self, cur, featureNames, targetTable):
-        return (
-            self.selectConsolidatedFeatures(cur, featureNames,
-                # inside=True
-            ).fillna(0).values,
-            self.selectTarget(cur, targetTable,
-                # inside=True
-            ).fillna(0).values
-        )
+        feats = self.selectConsolidatedFeatures(cur, featureNames, inside=True).fillna(0).values
+        targets = self.selectTarget(cur, targetTable, inside=True).fillna(0).values
+        return feats, targets
 
 
 class ModelArrayTrainer(ModelTrainer):
@@ -150,11 +148,23 @@ class ModelApplier(field.Handler):
             self.saveWeights(cur, weightTable, ids, weights, overwrite=overwrite)
 
     def selectFeaturesAndIds(self, cur, featureNames):
-        data = self.selectConsolidatedFeatures(cur, featureNames + ['geohash'])
+        currentNames = self.getConsolidatedFeatureNames(cur)
+        missings = []
+        founds = []
+        for name in featureNames:
+            if name in currentNames:
+                founds.append(name)
+            else:
+                missings.append(name)
+                self.logger.warn('feature %s from model not found in target schema, imputing zeros', name)
+        data = self.selectConsolidatedFeatures(cur, founds + ['geohash'])
         ids = data['geohash'].tolist()
         data.drop('geohash', axis=1, inplace=True)
         data.fillna(0, inplace=True)
-        return data.values, ids
+        for name in missings:
+            data[name] = 0
+        print(data[featureNames].values.shape, len(featureNames), len(currentNames))
+        return data[featureNames].values, ids
 
     def saveWeights(self, cur, weightTable, ids, weights, overwrite=False):
         params = {
@@ -240,7 +250,7 @@ class ModelIntrospector(core.Task):
     def main(self, modelfile):
         model = Model.load(modelfile)
         coreModel = model.getRegressor()
-        featnames = model.getFeatureNames()
+        featnames = model.getFeatureNames(intercept=True)
         reported = False
         for attr, name, sorter in self.ITEMS:
             if hasattr(coreModel, attr):
