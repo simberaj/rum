@@ -30,12 +30,23 @@ class Model:
         'extra' : sklearn.ensemble.ExtraTreesRegressor,
         'gboost' : sklearn.ensemble.GradientBoostingRegressor,
     }
+    PARAMETERS = {
+        'rfor' : {'n_estimators' : 100},
+        'extra' : {'n_estimators' : 100},
+        'gboost' : {'n_estimators' : 200, 'loss' : 'lad'},
+        'sgd' : {'max_iter' : 500, 'tol' : 1e-5},
+        'ann' : {'max_iter' : 500, 'activation' : 'tanh'},
+        'knn' : {'n_neighbors' : 5},
+        'svr' : {'gamma' : 'auto'},
+    }
 
     def __init__(self, typename, **kwargs):
         self.type = self.TYPES[typename]
         self.typename = typename
         self.scaler = sklearn.preprocessing.StandardScaler()
-        self.regressor = self.type(**kwargs)
+        params = self.PARAMETERS.get(typename, {}).copy()
+        params.update(kwargs)
+        self.regressor = self.type(**params)
         self.featureNames = None
         self.targetName = None
 
