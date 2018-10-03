@@ -22,6 +22,7 @@ if __name__ == '__main__':
     rum.calculate.TargetCalculator.fromArgs(args).run(
         args.table,
         args.source_field,
+        target=args.output_name,
         relative=args.relative,
         overwrite=args.overwrite
     )
