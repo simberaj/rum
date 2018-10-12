@@ -1,0 +1,19 @@
+{
+    "leading" : false,
+    "default" : "other",
+    "keytype" : "int",
+    "translation" : {
+        "201" : "water",
+        "202" : "water",
+        "203" : "water",
+        "301" : "other",
+        "302" : "grass",
+        "303" : "cultivated",
+        "304" : "barren",
+        "305" : "forest",
+        "306" : "wetland",
+        "307" : "wetland",
+        "501" : "road",
+        "505" : "public"
+    }
+}

@@ -4,7 +4,7 @@ import logging
 import logging.handlers
 import contextlib
 import json
-import uuid
+import datetime
 
 import psycopg2
 from psycopg2 import sql
@@ -32,10 +32,8 @@ TYPES_TO_POSTGRE = {
     float : 'double precision',
     bool : 'boolean',
     int : 'integer',
+    datetime.datetime : 'datetime',
 }
-
-def tmpName():
-    return uuid.uuid4().hex
 
 
 class Error(Exception):

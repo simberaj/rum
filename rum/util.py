@@ -1,19 +1,18 @@
-import json
 from psycopg2 import sql
 
 from . import core, attribute
 
 class Recategorizer(core.DatabaseTask):
     def main(self, table, source, target, translation, overwrite=False):
-        transDict, default, leading = attribute.loadTranslation(translation)
-        targetType = core.TYPES_TO_POSTGRE[type(next(iter(transDict.values())))]
+        translator = attribute.Translator.load(translation)
+        outType = translator.outputPGType()
         with self._connect() as cur:
-            self.createTargetField(cur, table, target, targetType, overwrite)
+            self.createTargetField(cur, table, target, outType, overwrite)
             qry = sql.SQL('UPDATE {schema}.{table} SET {target} = ').format(
                 schema=self.schemaSQL,
                 table=sql.Identifier(table),
                 target=sql.Identifier(target),
-            ) + self.caseQuery(cur, source, transDict, default, leading)
+            ) + translator.caseQuery(cur, source)
             self.logger.debug('recategorizing with %s', qry)
             cur.execute(qry)
 
@@ -36,23 +35,6 @@ class Recategorizer(core.DatabaseTask):
         self.logger.debug('adding recategorized column: %s', qry)
         cur.execute(qry)
 
-    def caseQuery(self, cur, column, translation, default=attribute.PassThrough, leading=False):
-        colSQL = sql.Identifier(column)
-        cases = [
-            sql.SQL('WHEN {column} {matcher} {fromval} THEN {toval}').format(
-                column=colSQL,
-                matcher=sql.SQL('LIKE' if leading else '='),
-                fromval=sql.Literal((fromval + '%') if leading else fromval),
-                toval=sql.Literal(toval),
-            )
-            for fromval, toval in translation.items()
-        ]
-        defaultSQL = colSQL if default is attribute.PassThrough else sql.Literal(default)
-        return (
-            sql.SQL('CASE\n') +
-            sql.SQL('\n').join(cases) +
-            sql.SQL('\nELSE {} END').format(defaultSQL)
-        )
 
 class ShapeCalculator(core.DatabaseTask):
     fields = [

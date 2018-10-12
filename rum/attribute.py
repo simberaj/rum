@@ -1,3 +1,6 @@
+import json
+
+from psycopg2 import sql
 
 from . import core
 
@@ -249,14 +252,80 @@ class PassThrough:
     pass
 
 
-def loadTranslation(path):
-    with open(path, encoding='utf8') as infile:
-        transDict = json.load(infile)
-    if 'translation' in transDict:
-        return (
-            transDict['translation'],
-            transDict.get('default', PassThrough),
-            bool(transDict.get('leading', False))
+class Translator:
+    def __init__(self, translation, default=PassThrough, leading=False):
+        self.translation = translation
+        self.default = default
+        self.leading = leading
+        self.translate = self.translationFunction()
+        
+    def translationFunction(self):
+        if self.leading:
+            translItems = list(self.translation.items())
+            def translateInner(value, default):
+                for key, target in translItems:
+                    if value.startswith(key):
+                        return target
+                return default
+        else:
+            def translateInner(value, default):
+                return self.translation.get(value, default)
+        if self.default is PassThrough:
+            def translateOuter(value):
+                return translateInner(value, value)
+        else:
+            def translateOuter(value):
+                return translateInner(value, self.default)
+        return translateOuter
+
+    def outputPGType(self):
+        try:
+            pyType = type(next(iter(self.translation.values())))
+        except StopIteration:
+            if self.default is PassThrough:
+                raise ValueError('cannot determine output type: empty translation and no default')
+            else:
+                pyType = type(self.default)
+        return core.TYPES_TO_POSTGRE[pyType]
+        
+    def caseQuery(self, cur, column):
+        colSQL = sql.Identifier(column)
+        cases = [
+            sql.SQL('WHEN {column} {matcher} {fromval} THEN {toval}').format(
+                column=colSQL,
+                matcher=sql.SQL('LIKE' if self.leading else '='),
+                fromval=sql.Literal((fromval + '%') if self.leading else fromval),
+                toval=sql.Literal(toval),
+            )
+            for fromval, toval in self.translation.items()
+        ]
+        defaultSQL = (
+            colSQL if self.default is PassThrough
+            else sql.Literal(self.default)
         )
-    else:
-        return transDict, PassThrough, False
+        return (
+            sql.SQL('CASE\n') +
+            sql.SQL('\n').join(cases) +
+            sql.SQL('\nELSE {} END').format(defaultSQL)
+        )
+
+        
+    @classmethod
+    def load(cls, path):
+        with open(path, encoding='utf8') as infile:
+            transDict = json.load(infile)
+        if 'translation' in transDict:
+            trueTransDict = transDict['translation']
+            if 'keytype' in transDict:
+                converter = __builtins__[transDict['keytype']]
+                trueTransDict = {
+                    converter(key) : value
+                    for key, value in trueTransDict.items()
+                }
+            return cls(
+                trueTransDict,
+                transDict.get('default', PassThrough),
+                bool(transDict.get('leading', False))
+            )
+        else:
+            return transDict, PassThrough, False
