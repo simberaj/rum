@@ -822,6 +822,8 @@ class Writer:
         geometry = feature['geometry']
         if hasattr(geometry, 'keys'):
             geometry = shapely.geometry.shape(geometry)
+        if geometry.has_z:
+            raise NotImplementedError('geometry contains z-coordinates')
         properties['geometry'] = geometry.wkb
         self.cursor.execute(self.insertQuery, properties)
         self.count += 1
