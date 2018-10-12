@@ -1,14 +1,11 @@
 import json
 from psycopg2 import sql
 
-from . import core
-
-class PassThrough:
-    pass
+from . import core, attribute
 
 class Recategorizer(core.DatabaseTask):
     def main(self, table, source, target, translation, overwrite=False):
-        transDict, default, leading = self.loadTranslation(translation)
+        transDict, default, leading = attribute.loadTranslation(translation)
         targetType = core.TYPES_TO_POSTGRE[type(next(iter(transDict.values())))]
         with self._connect() as cur:
             self.createTargetField(cur, table, target, targetType, overwrite)
@@ -19,18 +16,6 @@ class Recategorizer(core.DatabaseTask):
             ) + self.caseQuery(cur, source, transDict, default, leading)
             self.logger.debug('recategorizing with %s', qry)
             cur.execute(qry)
-
-    def loadTranslation(self, transPath):
-        with open(transPath, encoding='utf8') as infile:
-            transDict = json.load(infile)
-        if 'translation' in transDict:
-            return (
-                transDict['translation'],
-                transDict.get('default', PassThrough),
-                bool(transDict.get('leading', False))
-            )
-        else:
-            return transDict, PassThrough, False
 
     def createTargetField(self, cur, table, colname, coltype, overwrite):
         opts = dict(
@@ -51,7 +36,7 @@ class Recategorizer(core.DatabaseTask):
         self.logger.debug('adding recategorized column: %s', qry)
         cur.execute(qry)
 
-    def caseQuery(self, cur, column, translation, default=PassThrough, leading=False):
+    def caseQuery(self, cur, column, translation, default=attribute.PassThrough, leading=False):
         colSQL = sql.Identifier(column)
         cases = [
             sql.SQL('WHEN {column} {matcher} {fromval} THEN {toval}').format(
@@ -62,7 +47,7 @@ class Recategorizer(core.DatabaseTask):
             )
             for fromval, toval in translation.items()
         ]
-        defaultSQL = colSQL if default is PassThrough else sql.Literal(default)
+        defaultSQL = colSQL if default is attribute.PassThrough else sql.Literal(default)
         return (
             sql.SQL('CASE\n') +
             sql.SQL('\n').join(cases) +

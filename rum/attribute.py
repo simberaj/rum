@@ -10,7 +10,7 @@ class Selector:
 
     def __repr__(self):
         return self.__class__.__name__
-        
+
 class PresenceSelector(Selector):
     '''Selects a feature if it has a specified attribute.'''
 
@@ -19,18 +19,18 @@ class PresenceSelector(Selector):
 
     def __call__(self, attributes):
         return attributes.get(self.attribute, None) is not None
-        
+
 class ListSelector(Selector):
     '''Selects a feature if it has a specified attribute and its value is
     among the specified values.'''
-    
+
     def __init__(self, attribute, allowed):
         self.attribute = attribute
         self.allowedValues = allowed
 
     def __call__(self, attributes):
         return attributes.get(self.attribute, None) in self.allowedValues
-        
+
 class CompoundSelector(Selector):
     '''Selects a feature according to multiple conditions concatenated with a specified function.'''
 
@@ -43,31 +43,31 @@ class AndSelector(CompoundSelector):
             if not clause(attributes):
                 return False
         return True
-    
+
 class OrSelector(CompoundSelector):
     def __call__(self, attributes):
         for clause in self.clauses:
             if clause(attributes):
                 return True
         return False
-    
+
 class NotSelector(CompoundSelector):
     def __call__(self, attributes):
         for clause in self.clauses:
             return not clause(attributes)
-  
+
 COMPOUND_SELECTORS = {'and' : AndSelector, 'or' : OrSelector, 'not' : NotSelector}
-  
+
 class Getter:
     '''A class mimicking a function retrieving a value of a certain attribute from a feature attribute dictionary.'''
 
     def __call__(self, attributes):
         return None
-    
+
     def __repr__(self):
         return self.__class__.__name__
-        
-    
+
+
 class AggregateGetter(Getter):
     '''Extracts a single value based on multiple values retrieved by its subgetters.'''
 
@@ -80,20 +80,20 @@ class AggregateGetter(Getter):
             return self.AGGREGATOR(value for value in values if value is not None)
         except ValueError: # empty sequence
             return None
-        
+
 class MinGetter(AggregateGetter):
     AGGREGATOR = min
 
 class MaxGetter(AggregateGetter):
     AGGREGATOR = max
-    
-    
+
+
 class GatherGetter(Getter):
     '''Tries to extract a value from a number of attributes. Returns the first value found. If nothing is present, returns None.'''
 
     def __init__(self, names):
         self.names = names
-    
+
     def __call__(self, attributes):
         for name in self.names:
             attrval = attributes.get(name, None)
@@ -101,17 +101,17 @@ class GatherGetter(Getter):
                 return attrval
         return None
 
-        
+
 class ConstantGetter(Getter):
     '''Always returns a constant value.'''
 
     def __init__(self, val):
         self.val = val
-    
+
     def __call__(self, attributes):
         return self.val
 
-        
+
 class SwitchGetter(Getter):
     def __init__(self, name, cases):
         self.name = name
@@ -122,8 +122,8 @@ class SwitchGetter(Getter):
         if self.name in attributes:
             value = self.cases.get(attributes[self.name], None)
         return value
-      
-      
+
+
 class PresenceGetter(Getter):
     def __init__(self, name, value):
         self.name = name
@@ -131,20 +131,20 @@ class PresenceGetter(Getter):
 
     def __call__(self, attributes):
         return None if (attributes.get(self.name, None) is None) else self.value
-            
-            
+
+
 class AttributeGetter(Getter):
     def __init__(self, name):
         self.name = name
 
     def __call__(self, attributes):
         return attributes.get(self.name, None)
-            
+
 
 class AlternativeGetter(Getter):
     def __init__(self, getters):
         self.getters = getters
-    
+
     def __call__(self, attributes):
         for getter in self.getters:
             value = getter(attributes)
@@ -155,7 +155,7 @@ class AlternativeGetter(Getter):
 class MultiGetter(Getter):
     def __init__(self, getters):
         self.getters = getters
-    
+
     def __call__(self, attributes):
         values = []
         for getter in self.getters:
@@ -166,21 +166,21 @@ class MultiGetter(Getter):
             values = list(frozenset(values))
         return values if values else None
 
-        
+
 class Attribute:
     '''An attribute. Stores its name, type and getter.'''
 
     TYPES = {'enumstring' : str, 'string' : str, 'float' : float, 'boolean' : bool, 'int' : int}
     UNIT_REMOVER = (lambda x: x.split()[0])
     TYPE_CONV = {str : None, float : UNIT_REMOVER, int : UNIT_REMOVER, bool : None}
-    
+
     def __init__(self, name, type, getter, restrict=False):
         self.name = name # public
         self.type = type # public
         self.typeConverter = self.TYPE_CONV[self.type]
         self.getter = getter
         self.restrict = restrict # public
-        
+
     def get(self, values):
         try:
             val = self.getter(values)
@@ -194,11 +194,11 @@ class Attribute:
                 return self.type(val)
         except ValueError as mess:
             return None
-    
+
     @classmethod
     def fromConfig(cls, config):
         return cls(config['name'], cls.TYPES[config['type']], cls.parseGetter(config['getter']), restrict=(config.get('selection', None) == 'restrict'))
-    
+
     @classmethod
     def parseGetter(cls, config):
         if 'switch' in config:
@@ -221,10 +221,10 @@ class Attribute:
             return GatherGetter(config['gather'])
         else:
             raise core.ConfigError('no getter found: ' + str(config))
-        
+
     def __repr__(self):
         return self.name + '(' + str(self.type) + ',' + str(self.getter) + ')'
-    
+
 def selector(config):
     if not config:
         return None
@@ -243,3 +243,20 @@ def selector(config):
 
 def attribute(config):
     return Attribute.fromConfig(config)
+
+
+class PassThrough:
+    pass
+
+
+def loadTranslation(path):
+    with open(path, encoding='utf8') as infile:
+        transDict = json.load(infile)
+    if 'translation' in transDict:
+        return (
+            transDict['translation'],
+            transDict.get('default', PassThrough),
+            bool(transDict.get('leading', False))
+        )
+    else:
+        return transDict, PassThrough, False
