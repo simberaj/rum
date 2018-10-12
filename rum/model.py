@@ -16,6 +16,48 @@ import sklearn.preprocessing
 
 from . import core, field
 
+
+class LADRegression:
+    def __init__(self, epsilon=1e-7, delta=1e-3, **kwargs):
+        self.epsilon = epsilon
+        self.delta = delta
+        self.inner = sklearn.linear_model.LinearRegression(**kwargs)
+    
+    def fit(self, X, y, sample_weights=None):
+        if sample_weights is None:
+            sample_weights = numpy.ones(y.shape[0])
+        prev_tae = numpy.inf
+        tgtsum = y.sum()
+        while True:
+            self.inner.fit(X, y, sample_weights)
+            fitted = self.inner.predict(X)
+            resid = abs(fitted - y)
+            tae = resid.sum() / tgtsum
+            if abs(tae - prev_tae) < self.epsilon:
+                break
+            prev_tae = tae
+            sample_weights = 1 / numpy.where(resid < self.delta, self.delta, resid)
+        self.coef_ = self.inner.coef_
+        self.intercept_ = self.inner.intercept_
+    
+    def predict(self, X):
+        return self.inner.predict(X)
+        
+        
+class SumMatchingMultiplication:
+    def __init__(self, fit_intercept=False):
+        if fit_intercept:
+            raise NotImplementedError
+    
+    def fit(self, X, y):
+        self.multiplier = y.sum() / X.sum()
+        self.coef_ = [self.multiplier]
+        self.intercept_ = 0
+    
+    def predict(self, X):
+        return (X * self.multiplier).sum(axis=1)
+
+
 class Model:
     TYPES = {
         'ols' : sklearn.linear_model.LinearRegression,
@@ -241,6 +283,48 @@ class ModelArrayApplier(ModelApplier):
                 pass
 
 
+class Calibrator(field.Handler):
+    MODEL_TYPES = {
+        'lad' : LADRegression,
+        'ols' : sklearn.linear_model.LinearRegression,
+        'sum' : SumMatchingMultiplication,
+    }
+
+    def main(self, table, idField, rawField, calibField, outputField, type='sum', overwrite=False, fit_intercept=True):
+        with self._connect() as cur:
+            self.createField(cur, table=table, name=outputField, overwrite=overwrite)
+            data = self.selectValues(cur, table, [idField, rawField, calibField])
+            self.logger.debug('fitting calibrator')
+            calibrator = self.MODEL_TYPES[type](fit_intercept=fit_intercept)
+            feats = data[rawField].values.reshape(-1, 1)
+            # print(feats)
+            tgts = data[calibField].values
+            # print(tgts)
+            calibrator.fit(feats, tgts)
+            self.logger.info(
+                'calibrator fitted: linear coefficient %g, intercept %g',
+                calibrator.coef_[0], calibrator.intercept_
+            )
+            fitted = calibrator.predict(feats)
+            fitted = numpy.where(fitted < 0, 0, fitted)
+            qry = sql.SQL('''UPDATE {schema}.{table} SET {outputField} = fitted
+                FROM (SELECT 
+                    unnest(%s) as id,
+                    unnest(%s) as fitted
+                ) newvals
+                WHERE {schema}.{table}.{idField} = newvals.id
+            ''').format(
+                schema=self.schemaSQL,
+                table=sql.Identifier(table),
+                outputField=sql.Identifier(outputField),
+                idField=sql.Identifier(idField),
+            ).as_string(cur)
+            self.logger.debug('inserting fitted values: %s', qry)
+            cur.execute(qry, [data[idField].values.tolist(), fitted.tolist()])
+            
+            
+                
+                
 class ModelIntrospector(core.Task):
     ITEMS = [
         ('feature_importances_', 'feature importances', None),

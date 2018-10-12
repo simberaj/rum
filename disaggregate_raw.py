@@ -11,6 +11,8 @@ argparser.add_argument('disag_field', help='field in disag_table to disaggregate
 argparser.add_argument('weight_table', help='weight table to be used')
 argparser.add_argument('weight_field', help='field in the weight table to be used')
 argparser.add_argument('output_table', help='table with output disaggregated values field')
+argparser.add_argument('-k', '--keep-unweighted', action='store_true',
+    help='keep disaggregation features without an overlapping weight feature')
 argparser.add_argument('-r', '--relative', action='store_true',
     help='the values in disaggregation field are relative')
 argparser.add_argument('-o', '--overwrite', action='store_true',
@@ -22,5 +24,5 @@ if __name__ == '__main__':
         args.disag_table, args.disag_field,
         args.output_table,
         args.weight_table, args.weight_field,
-        args.relative, args.overwrite
+        args.keep_unweighted, args.relative, args.overwrite
     )

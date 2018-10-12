@@ -218,31 +218,40 @@ class FeatureConsolidator(core.DatabaseTask):
 
 class RawDisaggregator(core.DatabaseTask):
     disagPattern = sql.SQL('''CREATE TABLE {schema}.{outputTable} AS (
-        WITH fweights AS (SELECT
-                w.geometry AS geometry,
-                d.geometry AS dgeometry,
-                d.{disagField} AS dval,
-                CASE WHEN w.{weightField} IS NULL THEN 0
-                    ELSE w.{weightField} * st_area(st_intersection(w.geometry, d.geometry))
-                END AS fweight
-            FROM {schema}.{weightTable} w
-                JOIN {schema}.{disagTable} d ON st_intersects(w.geometry, d.geometry)
+        WITH parts AS (SELECT
+            s.{disagField} AS src_value,
+            CASE WHEN t.geometry IS NULL THEN 1 ELSE
+                CASE WHEN t.{weightField} IS NULL THEN 0 ELSE t.{weightField} END
+                * st_area(st_intersection(t.geometry, s.geometry))
+                / (
+                    sum(st_area(st_intersection(t.geometry, s.geometry)))
+                    OVER (PARTITION BY t.geometry)
+                )
+            END AS part_weight,
+            CASE WHEN t.geometry IS NULL THEN s.geometry ELSE t.geometry END AS tgt_geometry,
+            s.geometry AS src_geometry
+        FROM {schema}.{disagTable} s
+            {jointype} {schema}.{weightTable} t ON st_intersects(t.geometry, s.geometry)
         ),
-        transfers AS (SELECT
-                dgeometry, sum(fweight) AS coef
-            FROM fweights
-            GROUP BY dgeometry
+        tcoefs AS (SELECT
+                max(src_value) / sum(part_weight) as tcoef, src_geometry
+            FROM parts
+            GROUP BY src_geometry
+        ),
+        grouped AS (SELECT
+                sum(p.part_weight * t.tcoef) AS value,
+                p.tgt_geometry as geometry
+            FROM parts p
+                JOIN tcoefs t ON p.src_geometry=t.src_geometry
+            GROUP BY p.tgt_geometry
         )
         SELECT
-            fw.geometry, sum(
-                CASE WHEN t.coef = 0 THEN 0 ELSE fw.dval * fw.fweight / t.coef END
-            ) as value
-        FROM fweights fw
-            JOIN transfers t ON fw.dgeometry=t.dgeometry
-        GROUP BY fw.geometry
+            g.geometry, g.value, w.{weightColumns}
+        FROM grouped g
+            LEFT JOIN {schema}.{weightTable} w ON g.geometry=w.geometry
     )''')
 
-    def main(self, disagTable, disagField, outputTable, weightTable, weightField, relative=False, overwrite=False):
+    def main(self, disagTable, disagField, outputTable, weightTable, weightField, keepUnweighted=False, relative=False, overwrite=False):
         if relative:
             raise NotImplementedError
         with self._connect() as cur:
@@ -254,6 +263,12 @@ class RawDisaggregator(core.DatabaseTask):
                 weightTable=sql.Identifier(weightTable),
                 weightField=sql.Identifier(weightField),
                 outputTable=sql.Identifier(outputTable),
+                weightColumns=sql.SQL(', w.').join(
+                    sql.Identifier(col)
+                    for col in self.getColumnNamesForTable(cur, weightTable)
+                    if col != 'geometry'
+                ),
+                jointype=(sql.SQL('LEFT JOIN') if keepUnweighted else sql.SQL('INNER JOIN'))
             ).as_string(cur)
             self.logger.debug('disaggregating: %s', disagQry)
             cur.execute(disagQry)
