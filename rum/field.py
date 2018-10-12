@@ -87,10 +87,10 @@ class Handler(core.DatabaseTask):
             order='geohash'
         )['target']
         
-    def createField(self, cur, name, overwrite=False):
-        self.createFields(cur, [name], overwrite=overwrite)
+    def createField(self, cur, name, **kwargs):
+        self.createFields(cur, [name], **kwargs)
         
-    def createFields(self, cur, names, overwrite=False):
+    def createFields(self, cur, names, overwrite=False, table='grid'):
         fieldChunks = [
             sql.SQL('ADD {ifnex}{colname} {coltype}').format(
                 ifnex=sql.SQL('IF NOT EXISTS ' if overwrite else ''),
@@ -99,8 +99,9 @@ class Handler(core.DatabaseTask):
             )
             for field in names
         ]
-        creator = sql.SQL('ALTER TABLE {schema}.grid {actions}').format(
+        creator = sql.SQL('ALTER TABLE {schema}.{table} {actions}').format(
             schema=self.schemaSQL,
+            table=sql.Identifier(table),
             actions=sql.SQL(', ').join(fieldChunks)
         ).as_string(cur)
         self.logger.debug('creating fields: %s', creator)

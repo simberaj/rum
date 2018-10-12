@@ -10,7 +10,28 @@ import matplotlib.pyplot as plt
 from . import field, html
 
 
-class ModelValidator(field.Handler):
+class BaseValidator(field.Handler):
+    @staticmethod
+    def validate(data, trueField, modelField, reportPath):
+        models = data[modelField].values
+        trues = data[trueField].values
+        validator = Validator(models, trues)
+        validator.validate()
+        for ind, val in validator.results.items():
+            print(ind.ljust(7), val)
+        if reportPath:
+            validator.output(reportPath)
+        return validator.results
+        
+        
+class RawValidator(BaseValidator):
+    def main(self, table, trueField='target', modelField='value', reportPath=None):
+        with self._connect() as cur:
+            data = self.selectValues(cur, table, [trueField, modelField]).fillna(0)
+        return self.validate(data, trueField, modelField, reportPath)
+            
+
+class ModelValidator(BaseValidator):
     def main(self, trueTable, modelTable, trueField='target', modelField='value', reportPath=None):
         with self._connect() as cur:
             data = self.select(cur, trueTable, modelTable, trueField, [modelField])
@@ -35,17 +56,6 @@ class ModelValidator(field.Handler):
         cur.execute(qry)
         return self.resultToDF(cur, [trueField] + modelFields).fillna(0)
     
-    @staticmethod
-    def validate(data, trueField, modelField, reportPath):
-        models = data[modelField].values
-        trues = data[trueField].values
-        validator = Validator(models, trues)
-        validator.validate()
-        for ind, val in validator.results.items():
-            print(ind.ljust(7), val)
-        if reportPath:
-            validator.output(reportPath)
-        return validator.results
         
         
 class ModelArrayValidator(ModelValidator):
@@ -68,7 +78,7 @@ class ModelArrayValidator(ModelValidator):
         return results
         
         
-class ModelMultiscaleValidator(ModelValidator):
+class ModelMultiscaleValidator(BaseValidator):
     defaultMultiples = [2, 5, 10]
     createPattern = sql.SQL('''
         CREATE TABLE {schema}.{grid}
