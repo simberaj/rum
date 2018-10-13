@@ -118,12 +118,23 @@ class FeatureConsolidator(core.DatabaseTask):
         with self._connect() as cur:
             self.clearTable(cur, 'all_feats', overwrite)
             featnames = self.getFeatureNames(cur)
-            if self.hasConditionTable(cur):
+            hasCondition = self.hasConditionTable(cur)
+            if hasCondition:
                 featnames['condition'] = ['condition']
             qry = self.consolidationQuery(featnames).as_string(cur)
             self.logger.debug('consolidating features: %s', qry)
             cur.execute(qry)
+            if not hasCondition:
+                self.createDefaultConditionField(cur)
             self.createPrimaryKey(cur, 'all_feats')
+    
+    def createDefaultConditionField(self, cur):
+        qry = sql.SQL('''ALTER TABLE {schema}.all_feats
+            ADD COLUMN condition boolean NOT NULL DEFAULT TRUE;'''
+        ).format(schema=self.schemaSQL).as_string(cur)
+        self.logger.debug('adding default condition field: %s', qry)
+        cur.execute(qry)
+
 
     def consolidationQuery(self, featnames):
         fieldsSQLs = []
