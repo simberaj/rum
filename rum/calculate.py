@@ -243,7 +243,7 @@ class LengthDefiner(ExpressionDefiner):
 class CoverageDefiner(ExpressionDefiner):
     code = 'cov'
     numerator = 'aux_common_area'
-    denominator = 'sum(aux_cell_area)'
+    denominator = 'max(aux_cell_area)'
 
 class SumDefiner(ExpressionDefiner):
     code = 'sum'
