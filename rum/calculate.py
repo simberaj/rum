@@ -13,7 +13,7 @@ PARTIAL_EXPRESSIONS = {
     'aux_item_area' : 'ST_Area({schema}.{table}.geometry)',
     'aux_common_length' : 'ST_Length(ST_Intersection({schema}.grid.geometry, {schema}.{table}.geometry))',
     'aux_common_area' : 'ST_Area(ST_Intersection({schema}.grid.geometry, {schema}.{table}.geometry))',
-    'aux_cell_area' : 'ST_Area({schema}.{table}.geometry)'
+    'aux_cell_area' : 'ST_Area({schema}.grid.geometry)'
 }
 
 class Calculator(field.Handler):
