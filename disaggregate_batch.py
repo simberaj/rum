@@ -16,7 +16,7 @@ argparser.add_argument('output_table',
 argparser.add_argument('-r', '--relative', action='store_true',
     help='the values in disaggregation field are relative')
 argparser.add_argument('-o', '--overwrite', action='store_true',
-    help='overwrite existing weight field')
+    help='overwrite existing output table')
 
 if __name__ == '__main__':
     args = argparser.parse_args()
