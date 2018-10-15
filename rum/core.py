@@ -231,7 +231,7 @@ class ExtentMaker(DatabaseTask):
 
 class GridMaker(DatabaseTask):
     createPattern = sql.SQL('''
-        CREATE TABLE {schema}.grid
+        CREATE TABLE {schema}.{grid}
             AS (WITH rawgrid AS
                 (SELECT
                     makegrid(geometry,{gridSize},{xoffset},{yoffset}) AS geometry
@@ -245,24 +245,26 @@ class GridMaker(DatabaseTask):
                     )) as geohash
                 FROM {schema}.extent e, rawgrid g
             );
-        SELECT Populate_Geometry_Columns('{schema}.grid'::regclass);
-        CREATE INDEX {indexName} ON {schema}.grid USING GIST (geometry);
+        SELECT Populate_Geometry_Columns(('{schema}.' || {gridLit})::regclass);
+        CREATE INDEX {indexName} ON {schema}.{grid} USING GIST (geometry);
     ''')
 
-    def main(self, gridSize=100, xoffset=0, yoffset=0, overwrite=False):
+    def main(self, gridName='grid', gridSize=100, xoffset=0, yoffset=0, overwrite=False):
         with self._connect() as cur:
-            indexName = '{}_grid_gix'.format(self.schema)
-            self.clearTable(cur, 'grid', overwrite=overwrite)
+            indexName = '{}_{}_gix'.format(self.schema, gridName)
+            self.clearTable(cur, gridName, overwrite=overwrite)
             qry = self.createPattern.format(
                 schema=self.schemaSQL,
                 indexName=sql.Identifier(indexName),
                 gridSize=sql.Literal(gridSize),
                 xoffset=sql.Literal(xoffset),
                 yoffset=sql.Literal(yoffset),
+                grid=sql.Identifier(gridName),
+                gridLit=sql.Literal(gridName),
             ).as_string(cur)
             self.logger.debug('grid create query: %s', qry)
             cur.execute(qry)
-            self.createPrimaryKey(cur, 'grid')
+            self.createPrimaryKey(cur, gridName)
 
 
 class Connector:
