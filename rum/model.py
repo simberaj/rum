@@ -4,6 +4,7 @@ import gzip
 import operator
 
 import numpy
+import scipy.optimize
 import psycopg2.extras
 from psycopg2 import sql
 import pandas as pd
@@ -22,7 +23,7 @@ class LADRegression:
         self.epsilon = epsilon
         self.delta = delta
         self.inner = sklearn.linear_model.LinearRegression(**kwargs)
-    
+
     def fit(self, X, y, sample_weights=None):
         if sample_weights is None:
             sample_weights = numpy.ones(y.shape[0])
@@ -39,21 +40,21 @@ class LADRegression:
             sample_weights = 1 / numpy.where(resid < self.delta, self.delta, resid)
         self.coef_ = self.inner.coef_
         self.intercept_ = self.inner.intercept_
-    
+
     def predict(self, X):
         return self.inner.predict(X)
-        
-        
+
+
 class SumMatchingMultiplication:
     def __init__(self, fit_intercept=False):
         if fit_intercept:
             raise NotImplementedError
-    
+
     def fit(self, X, y):
         self.multiplier = y.sum() / X.sum()
         self.coef_ = [self.multiplier]
         self.intercept_ = 0
-    
+
     def predict(self, X):
         return (X * self.multiplier).sum(axis=1)
 
@@ -112,7 +113,7 @@ class Model:
         preds = self.regressor.predict(self.scaler.transform(self.addIntercept(features)))
         preds[preds < 0] = 0
         return preds
-    
+
     def addIntercept(self, features):
         return numpy.hstack((features, numpy.zeros((len(features), 1))))
 
@@ -308,7 +309,7 @@ class Calibrator(field.Handler):
             fitted = calibrator.predict(feats)
             fitted = numpy.where(fitted < 0, 0, fitted)
             qry = sql.SQL('''UPDATE {schema}.{table} SET {outputField} = fitted
-                FROM (SELECT 
+                FROM (SELECT
                     unnest(%s) as id,
                     unnest(%s) as fitted
                 ) newvals
@@ -321,10 +322,10 @@ class Calibrator(field.Handler):
             ).as_string(cur)
             self.logger.debug('inserting fitted values: %s', qry)
             cur.execute(qry, [data[idField].values.tolist(), fitted.tolist()])
-            
-            
-                
-                
+
+
+
+
 class ModelIntrospector(core.Task):
     ITEMS = [
         ('feature_importances_', 'feature importances', None),
