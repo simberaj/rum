@@ -19,7 +19,15 @@ argparser.add_argument('-y', '--yoffset', metavar='distance',
 argparser.add_argument('-o', '--overwrite', action='store_true',
     help='overwrite existing grid'
 )
+argparser.add_argument('-g', '--grid-name', metavar='name', default='grid',
+    help='name of the grid to create (default: grid)'
+)
 
 if __name__ == '__main__':
     args = argparser.parse_args()
-    rum.GridMaker.fromArgs(args).run(args.cellsize, args.xoffset, args.yoffset, args.overwrite)
+    rum.GridMaker.fromArgs(args).run(
+        args.grid_name,
+        args.cellsize,
+        args.xoffset, args.yoffset,
+        args.overwrite
+    )
