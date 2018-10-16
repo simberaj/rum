@@ -300,33 +300,43 @@ class Disaggregator(core.DatabaseTask):
 class BatchDisaggregator(Disaggregator):
     disagPattern = sql.SQL('''
     CREATE TABLE {schema}.{outputTable} AS (
-        WITH fweights AS (SELECT
+        WITH parts AS (SELECT
                 g.geohash,
-                d.geometry AS dgeometry,
-                d.{disagField} AS dval,
+                d.geometry AS src_geometry,
+                st_area(st_intersection(g.geometry, d.geometry)) AS part_area,
+                d.{disagField} AS src_value,
                 {fweights}
             FROM {schema}.grid g
                 JOIN {schema}.{disagTable} d ON st_intersects(g.geometry, d.geometry)
                 LEFT JOIN {schema}.{weightTable} w ON g.geohash=w.geohash
+            WHERE st_area(st_intersection(g.geometry, d.geometry)) > 0
         ),
         transfers AS (SELECT
-                dgeometry,
+                src_geometry,
+                sum(part_area) AS total_area,
+                max(src_value) as src_value,
                 {transfers}
-            FROM fweights
-            GROUP BY dgeometry
+            FROM parts
+            GROUP BY src_geometry
         )
         SELECT
-            fw.geohash,
+            p.geohash,
             {finals}
-        FROM fweights fw
-            JOIN transfers t ON fw.dgeometry=t.dgeometry
-        GROUP BY fw.geohash
+        FROM parts p
+            JOIN transfers t ON p.src_geometry=t.src_geometry
+        GROUP BY p.geohash
     )''')
 
     patterns = [
-        ('fweights', sql.SQL('CASE WHEN w.{0} IS NULL THEN 0 ELSE w.{0} * st_area(st_intersection(g.geometry, d.geometry)) END AS {0}')),
-        ('transfers', sql.SQL('sum({0}) AS {0}')),
-        ('finals', sql.SQL('sum(CASE WHEN t.{0} = 0 THEN 0 ELSE fw.dval * fw.{0} / t.{0} END) as {0}')),
+        ('fweights', sql.SQL('''(CASE WHEN w.{0} IS NULL THEN 0 ELSE w.{0} END
+            * st_area(st_intersection(g.geometry, d.geometry))
+            / (sum(st_area(st_intersection(g.geometry, d.geometry))) OVER (PARTITION BY g.geohash))
+            ) AS {0}''')),
+        ('transfers', sql.SQL('CASE WHEN sum({0}) = 0 THEN -1 ELSE 1 / sum({0}) END AS {0}')),
+        ('finals', sql.SQL('''sum(t.src_value * CASE
+                WHEN t.{0} = -1 THEN p.part_area / t.total_area
+                ELSE p.{0} * t.{0}
+            END) AS {0}''')),
     ]
 
     def getWeightColumns(self, cur, table):
@@ -339,6 +349,7 @@ class BatchDisaggregator(Disaggregator):
             raise NotImplementedError
         with self._connect() as cur:
             weightCols = self.getWeightColumns(cur, weightTable)
+            self.clearTable(cur, outputTable, overwrite=overwrite)
             self.logger.info('disaggregating by %d fields from %s', len(weightCols), weightTable)
             params = dict(
                 schema=self.schemaSQL,
