@@ -22,21 +22,21 @@ class BaseValidator(field.Handler):
         if reportPath:
             validator.output(reportPath)
         return validator.results
-        
-        
+
+
 class RawValidator(BaseValidator):
     def main(self, table, trueField='target', modelField='value', reportPath=None):
         with self._connect() as cur:
             data = self.selectValues(cur, table, [trueField, modelField]).fillna(0)
         return self.validate(data, trueField, modelField, reportPath)
-            
+
 
 class ModelValidator(BaseValidator):
     def main(self, trueTable, modelTable, trueField='target', modelField='value', reportPath=None):
         with self._connect() as cur:
             data = self.select(cur, trueTable, modelTable, trueField, [modelField])
         return self.validate(data, trueField, modelField, reportPath)
-            
+
     def select(self, cur, trueTable, modelTable, trueField, modelFields):
         qry = sql.SQL('''SELECT
             t.{trueField}, m.{modelFieldSeq}
@@ -55,9 +55,9 @@ class ModelValidator(BaseValidator):
         self.logger.debug('selecting validation data: %s', qry)
         cur.execute(qry)
         return self.resultToDF(cur, [trueField] + modelFields).fillna(0)
-    
-        
-        
+
+
+
 class ModelArrayValidator(ModelValidator):
     def main(self, trueTable, modelTable, trueField='target', reportPath=None):
         with self._connect() as cur:
@@ -76,67 +76,79 @@ class ModelArrayValidator(ModelValidator):
             )
             print()
         return results
-        
-        
+
+
 class ModelMultiscaleValidator(BaseValidator):
     defaultMultiples = [2, 5, 10]
-    createPattern = sql.SQL('''
-        CREATE TABLE {schema}.{grid}
-            AS (WITH rawgrid AS 
-                (SELECT 
-                    makegrid(geometry,{gridSize}) AS geometry
-                    FROM {schema}.extent
-                )
-                SELECT 
-                    r.geometry,
-                    {aggreg}(g.{trueField}) as {trueField},
-                    {aggreg}(g.{modelField}) as {modelField}
-                FROM rawgrid r
-                    JOIN {schema}.grid g ON ST_Contains(r.geometry, g.geometry)
-                GROUP BY r.geometry
-            );
-        SELECT Populate_Geometry_Columns('{schema}.{grid}'::regclass);
+    SELECTION = sql.SQL('''WITH multgrid AS
+        (SELECT
+            makegrid(geometry,{gridSize},{xoffset},{yoffset}) AS geometry
+            FROM {schema}.extent
+        )
+    SELECT
+        {aggreg}(t.{trueField}) AS {trueField},
+        {aggreg}(m.{modelField}) AS {modelField}
+    FROM multgrid mg
+        LEFT JOIN {schema}.grid g ON ST_Within(g.geometry, mg.geometry)
+        LEFT JOIN {schema}.{trueTable} t ON g.geohash=t.geohash
+        LEFT JOIN {schema}.{modelTable} m ON g.geohash=m.geohash
+    GROUP BY mg.geometry
     ''')
 
-    def main(self, trueField, modelField, multiples=None, reportPath=None, overwrite=False):
+    def main(self, trueTable, modelTable, trueField='target', modelField='value', multiples=None, reportPath=None, xoffset=None, yoffset=None):
         if reportPath and not os.path.exists(reportPath):
             self.logger.debug('creating directory %s', reportPath)
             os.mkdir(reportPath)
-        if multiples is None:
+        if not multiples:
             multiples = self.defaultMultiples
-        baseSize = self.getGridSize()
-        validator = ModelValidator(connector=self.connector.copy(), schema=self.schema)
+        gridSize = self.getGridSize()
+        if xoffset is None or yoffset is None:
+            newXOffset, newYOffset = self.getGridOffset()
+            if xoffset is None: xoffset = newXOffset
+            if yoffset is None: yoffset = newYOffset
+        # validator = ModelValidator(connector=self.connector.copy(), schema=self.schema)
         results = {}
-        for multiple in [1] + multiples:
-            print('Multiscale level {}'.format(multiple))
-            if multiple == 1:
-                gridName = 'grid'
-            else:
-                gridName = self.createGrid(
-                    trueField, modelField,
-                    baseSize, multiple,
-                    overwrite=overwrite
+        relative = False # TODO
+        with self._connect() as cur:
+            for multiple in multiples:
+                if reportPath:
+                    reportFile = os.path.join(reportPath, 'level_{}.html'.format(multiple))
+                print('Multiscale level {}'.format(multiple))
+                size = gridSize * multiple
+                qry = self.SELECTION.format(
+                    schema=self.schemaSQL,
+                    trueTable=sql.Identifier(trueTable),
+                    modelTable=sql.Identifier(modelTable),
+                    trueField=sql.Identifier(trueField),
+                    modelField=sql.Identifier(modelField),
+                    gridSize=sql.Literal(size),
+                    aggreg=sql.SQL('avg' if relative else 'sum'),
+                    xoffset=sql.Literal(xoffset % size),
+                    yoffset=sql.Literal(yoffset % size),
+                ).as_string(cur)
+                self.logger.debug(
+                    'retrieving validation data for multiple %d: %s',
+                    multiple, qry
                 )
-            if reportPath:
-                reportFile = os.path.join(reportPath, 'level_{}.html'.format(multiple))
-            results[multiple] = validator.main(
-                trueField, modelField,
-                reportFile,
-                grid=gridName
-            )
-            print()
+                cur.execute(qry)
+                results[multiple] = self.validate(
+                    self.resultToDF(cur, [trueField, modelField]).fillna(0),
+                    trueField, modelField,
+                    reportFile,
+                )
+                print()
         self.logger.debug('validation results: %s', results)
         with open(os.path.join(reportPath, 'results.csv'), 'w', newline='') as outfile:
             wr = csv.DictWriter(
                 outfile,
-                ['multiple'] + list(results[1].keys()),
+                ['multiple'] + list(results[multiples[0]].keys()),
                 delimiter=';'
             )
             wr.writeheader()
             for multiple in sorted(results):
                 results[multiple]['multiple'] = multiple
                 wr.writerow(results[multiple])
-    
+
     def getGridSize(self):
         with self._connect() as cur:
             qry = sql.SQL('''SELECT
@@ -145,25 +157,18 @@ class ModelMultiscaleValidator(BaseValidator):
             self.logger.debug('retrieving grid cell size: %s', qry)
             cur.execute(qry)
             return cur.fetchone()[0]
-    
-    def createGrid(self, trueField, modelField, baseSize, multiple, overwrite=False, relative=False):
-        gridName = 'grid_' + str(multiple).replace('.', '_')
-        gridSize = int(baseSize * multiple)
-        with self._connect() as cur:
-            self.clearTable(cur, gridName, overwrite)
-            qry = self.createPattern.format(
-                schema=self.schemaSQL,
-                gridSize=sql.Literal(gridSize),
-                grid=sql.Identifier(gridName),
-                aggreg=sql.SQL('avg' if relative else 'sum'),
-                trueField=sql.Identifier(trueField),
-                modelField=sql.Identifier(modelField),
-            ).as_string(cur)
-            self.logger.debug('multiplied grid create query: %s', qry)
-            cur.execute(qry)
-        return gridName
 
-                
+    def getGridDimensions(self, **kwargs):
+        with self._connect() as cur:
+            qry = sql.SQL('''SELECT
+                    min(ST_XMin(geometry)) as xoffset,
+                    min(ST_YMin(geometry)) as yoffset
+                FROM {schema}.grid''').format(schema=self.schemaSQL).as_string(cur)
+            self.logger.debug('retrieving grid cell offset: %s', qry)
+            cur.execute(qry)
+            return cur.fetchone()
+
+
 class Validator:
     templateFilePath = os.path.normpath(
         os.path.join(os.path.dirname(__file__), '..', 'share', 'report.html')
@@ -201,7 +206,7 @@ class Validator:
     def __init__(self, models, reals):
         self.models = models
         self.reals = reals
-    
+
     def validate(self):
         self.realSum = self.reals.sum()
         self.realMean = self.realSum / len(self.reals)
@@ -214,7 +219,7 @@ class Validator:
         self.rtae = self.tae / self.realSum
         self.r2 = 1 - self.sqResidSum / ((self.reals - self.realMean) ** 2).sum()
         self.rmse = math.sqrt(self.sqResidSum / len(self.reals))
-    
+
     @property
     def results(self):
         return {
@@ -224,7 +229,7 @@ class Validator:
             'R2' : self.r2,
             'RMSE' : self.rmse,
         }
-  
+
     def describe(self, data):
         return {
             'min' : data.min(),
@@ -239,7 +244,7 @@ class Validator:
             'q2l' : numpy.percentile(data, 2.5),
             'q2h' : numpy.percentile(data, 97.5)
         }
-  
+
     def descriptions(self):
         descs = []
         for name, data in (
@@ -252,7 +257,7 @@ class Validator:
             desc['set'] = name
             descs.append(desc)
         return descs
-  
+
     def globals(self):
         return dict(
             mismatch=self.mismatch,
@@ -261,13 +266,13 @@ class Validator:
             r2=self.r2,
             rmse=self.rmse
         )
-    
+
     def format(self, fdict):
         return {
             key : self.FORMATS[key].format(float(value)).replace('.', ',')
             for key, value in fdict.items()
         }
-  
+
     def output(self, fileName):
         try:
             with open(self.templateFilePath) as templFile:
@@ -291,8 +296,8 @@ class Validator:
         with open(fileName, 'w') as outfile:
             outfile.write(text.replace('[', '{').replace(']', '}'))
         self.outputImages(fileNameBase)
-    
-  
+
+
     def outputImages(self, fileNameBase):
         plt.figure()
         plt.loglog(self.reals, self.models, 'b.')
