@@ -33,6 +33,8 @@ TYPES_TO_POSTGRE = {
     bool : 'boolean',
     int : 'integer',
     datetime.datetime : 'datetime',
+    datetime.date : 'date',
+    datetime.time : 'time',
 }
 
 
@@ -169,6 +171,20 @@ class DatabaseTask(Task):
             for col in self.getColumnNamesForTable(cur, 'all_feats')
             if col != 'geohash' and (condition or col != 'condition')
         ]
+        
+    def createTable(self, cur, table, coldef, overwrite=False):
+        if overwrite:
+            self.clearTable(cur, table, overwrite=overwrite)
+        qry = sql.SQL('''CREATE TABLE {schema}.{table} ({fieldDefs})''').format(
+            schema=self.schemaSQL,
+            table=sql.Identifier(self.table),
+            fieldDefs=sql.SQL(', ').join(
+                sql.SQL(' ').join(defitem)
+                for defitem in coldef.items()
+            ),
+        ).as_string(cur)
+        self.logger.debug('creating table: %s', qry)
+        cur.execute(qry)
 
     def clearTable(self, cur, table, overwrite=False):
         if overwrite:

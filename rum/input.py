@@ -8,13 +8,16 @@ import os
 import json
 import bz2
 import glob
+import datetime
 
 import fiona
 import json
 
+import numpy
 import fiona.crs
 import psycopg2
 from psycopg2 import sql
+import pandas as pd
 import shapely.geometry
 import shapely.speedups
 import shapely.geos
@@ -1026,3 +1029,94 @@ class Writer:
             )
         else:
             return geometryPlaceholder
+            
+            
+class TableImporter(core.DatabaseTask):
+    MAX_HEADER_SIZE = 20000
+    MEMORY_LOAD_LIMIT = 1000000
+    POTENTIAL_DELIMITERS = [';', ',', '|']
+    ACCEPTED_DATE_FORMAT = '%Y-%m-%d'
+    INTEGER_DTYPES = [numpy.dtype('i8'), numpy.dtype(int)]
+    FLOAT_DTYPE = numpy.dtype(float)
+    OBJECT_DTYPE = numpy.dtype(object)
+    
+    CSVT_TO_DB = {
+        'String' : str,
+        'Integer' : int,
+        'Real' : float,
+        'DateTime' : datetime.datetime,
+        'Date' : datetime.date,
+        'Time' : datetime.time,
+    }
+
+    def main(self, table, file, encoding='utf8', overwrite=False):
+        colnames, delimiter = self.loadColumnNames(file, encoding=encoding)
+        coltypes = self.loadColumnTypes(file, sep=delimiter)
+        with self._connect() as cur:
+            self.createTable(cur, table, zip(colnames, coltypes), overwrite=overwrite)
+            cur.copy_from(file, tabledef, sep=delimiter, null='')
+            
+    def loadColumnNames(csvFileName, encoding='utf8'):
+        with open(csvFileName, encoding=encoding) as csvFile:
+            buffer = csvFile.read(self.MAX_HEADER_SIZE)
+            firstLine = buffer[:buffer.find('\n')]
+            delimFound = None
+            for delim in POTENTIAL_DELIMITERS:
+                if delim in firstLine:
+                    delimFound = delim
+                    self.logger.debug('delimiter detected: ' + delimFound)
+                    break
+            if delimFound is None:
+                raise ValueError('CSV file delimiter not found')
+            else:
+                colnames = [colname.strip('"') for colname in firstLine.split(delimFound)]
+                self.logger.debug('%i columns found', len(colnames))
+                return colnames, delimFound
+  
+    def loadColumnTypes(self, csvFileName, **kwargs):
+        csvtFileName = csvFileName + 't'
+        if os.path.isfile(csvtFileName):
+            self.logger.info('CSVT file found at %s, reading column type definitions', csvtFileName)
+            with open(csvFileName) as csvtFile:
+                typeinfo = csvtFile.read().strip('"')
+            types = [self.CSVT_TO_DB[t] for t in typeinfo.split('","')]
+        else:
+            self.logger.info('detecting column types from %s', csvFileName)
+            if os.path.getsize(csvFileName) > self.MEMORY_LOAD_LIMIT:
+                self.logger.warning('file too large to load into memory: loading only first {} bytes'.format(self.MEMORY_LOAD_LIMIT))
+                import io
+                with open(csvFileName, 'rb') as csvFile:
+                    bytecontent = csvFile.read(self.MEMORY_LOAD_LIMIT)
+                buffer = io.BytesIO(bytecontent[:bytecontent.rfind(b'\n')+1])
+                df = pd.read_csv(buffer, **kwargs)
+            else:
+                df = pd.read_csv(csvFileName, **kwargs)
+            types = self.dfToDBTypes(df)
+        return [core.TYPES_TO_POSTGRE[t] for t in types]
+
+    def dfToDBTypes(df):
+        coltypes = []
+        for colname in df.columns:
+            dtype = df.dtypes[colname]
+            if dtype == self.OBJECT_DTYPE:
+            try:
+                col = pd.to_datetime(df[colname], format=self.ACCEPTED_DATE_FORMAT)
+            except (TypeError, ValueError):
+                coltype = str
+            else:
+                coltype = datetime.datetime
+            elif dtype in self.INTEGER_DTYPES:
+                if set(df[colname].unique()) == set((0, 1)):
+                    coltype = bool
+                else:
+                    coltype = int
+            elif dtype == self.FLOAT_DTYPE:
+                nansFilled = df[colname].fillna(0)
+                if (nansFilled.astype(int) == nansFilled).all():
+                    coltype = int
+                else:
+                    coltype = float
+            else:
+                raise TypeError(dtype)
+            coltypes.append(core.TYPES_TO_POSTGRE[coltype])
+        return coltypes
