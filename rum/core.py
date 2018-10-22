@@ -173,13 +173,17 @@ class DatabaseTask(Task):
         ]
         
     def createTable(self, cur, table, coldef, overwrite=False):
+        # TODO accept field sizes in coldef
         if overwrite:
             self.clearTable(cur, table, overwrite=overwrite)
         qry = sql.SQL('''CREATE TABLE {schema}.{table} ({fieldDefs})''').format(
             schema=self.schemaSQL,
-            table=sql.Identifier(self.table),
+            table=sql.Identifier(table),
             fieldDefs=sql.SQL(', ').join(
-                sql.SQL(' ').join(defitem)
+                sql.SQL(' ').join([
+                    sql.Identifier(defitem[0]),
+                    sql.SQL(TYPES_TO_POSTGRE[defitem[1]])
+                ])
                 for defitem in coldef.items()
             ),
         ).as_string(cur)

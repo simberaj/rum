@@ -1040,7 +1040,7 @@ class TableImporter(core.DatabaseTask):
     FLOAT_DTYPE = numpy.dtype(float)
     OBJECT_DTYPE = numpy.dtype(object)
     
-    CSVT_TO_DB = {
+    CSVT_TO_PY_TYPE = {
         'String' : str,
         'Integer' : int,
         'Real' : float,
@@ -1052,16 +1052,29 @@ class TableImporter(core.DatabaseTask):
     def main(self, table, file, encoding='utf8', overwrite=False):
         colnames, delimiter = self.loadColumnNames(file, encoding=encoding)
         coltypes = self.loadColumnTypes(file, sep=delimiter)
+        coldef = dict(zip(colnames, coltypes))
+        self.logger.debug('column definition detected: %s', coldef)
         with self._connect() as cur:
-            self.createTable(cur, table, zip(colnames, coltypes), overwrite=overwrite)
-            cur.copy_from(file, tabledef, sep=delimiter, null='')
+            self.createTable(cur, table, coldef, overwrite=overwrite)
+            copyqry = sql.SQL('''COPY {schema}.{table} FROM STDIN (
+                FORMAT CSV, HEADER, DELIMITER {delimiter}, NULL '',
+                ENCODING {encoding}
+            )''').format(
+                schema=self.schemaSQL,
+                table=sql.Identifier(table),
+                encoding=sql.Literal(encoding),
+                delimiter=sql.Literal(delimiter),
+            ).as_string(cur)
+            self.logger.debug('copying data: %s', copyqry)
+            with open(file, 'rb') as infile:
+                cur.copy_expert(copyqry, infile)
             
-    def loadColumnNames(csvFileName, encoding='utf8'):
+    def loadColumnNames(self, csvFileName, encoding='utf8'):
         with open(csvFileName, encoding=encoding) as csvFile:
             buffer = csvFile.read(self.MAX_HEADER_SIZE)
             firstLine = buffer[:buffer.find('\n')]
             delimFound = None
-            for delim in POTENTIAL_DELIMITERS:
+            for delim in self.POTENTIAL_DELIMITERS:
                 if delim in firstLine:
                     delimFound = delim
                     self.logger.debug('delimiter detected: ' + delimFound)
@@ -1069,21 +1082,30 @@ class TableImporter(core.DatabaseTask):
             if delimFound is None:
                 raise ValueError('CSV file delimiter not found')
             else:
-                colnames = [colname.strip('"') for colname in firstLine.split(delimFound)]
+                colnames = [
+                    colname.strip('"')
+                    for colname in firstLine.split(delimFound)
+                ]
                 self.logger.debug('%i columns found', len(colnames))
                 return colnames, delimFound
   
     def loadColumnTypes(self, csvFileName, **kwargs):
         csvtFileName = csvFileName + 't'
         if os.path.isfile(csvtFileName):
-            self.logger.info('CSVT file found at %s, reading column type definitions', csvtFileName)
+            self.logger.info(
+                'CSVT file found at %s, reading column type definitions',
+                csvtFileName
+            )
             with open(csvFileName) as csvtFile:
                 typeinfo = csvtFile.read().strip('"')
-            types = [self.CSVT_TO_DB[t] for t in typeinfo.split('","')]
+            return [self.CSVT_TO_PY_TYPE[t] for t in typeinfo.split('","')]
         else:
             self.logger.info('detecting column types from %s', csvFileName)
             if os.path.getsize(csvFileName) > self.MEMORY_LOAD_LIMIT:
-                self.logger.warning('file too large to load into memory: loading only first {} bytes'.format(self.MEMORY_LOAD_LIMIT))
+                self.logger.warning(
+                    'file too large to load into memory: loading only first %s bytes',
+                    self.MEMORY_LOAD_LIMIT
+                )
                 import io
                 with open(csvFileName, 'rb') as csvFile:
                     bytecontent = csvFile.read(self.MEMORY_LOAD_LIMIT)
@@ -1091,32 +1113,29 @@ class TableImporter(core.DatabaseTask):
                 df = pd.read_csv(buffer, **kwargs)
             else:
                 df = pd.read_csv(csvFileName, **kwargs)
-            types = self.dfToDBTypes(df)
-        return [core.TYPES_TO_POSTGRE[t] for t in types]
+            return self.dfToDBTypes(df)
 
-    def dfToDBTypes(df):
-        coltypes = []
+    def dfToDBTypes(self, df):
         for colname in df.columns:
             dtype = df.dtypes[colname]
             if dtype == self.OBJECT_DTYPE:
-            try:
-                col = pd.to_datetime(df[colname], format=self.ACCEPTED_DATE_FORMAT)
-            except (TypeError, ValueError):
-                coltype = str
-            else:
-                coltype = datetime.datetime
+                try:
+                    col = pd.to_datetime(df[colname],
+                        format=self.ACCEPTED_DATE_FORMAT)
+                except (TypeError, ValueError):
+                    yield str
+                else:
+                    yield datetime.datetime
             elif dtype in self.INTEGER_DTYPES:
                 if set(df[colname].unique()) == set((0, 1)):
-                    coltype = bool
+                    yield bool
                 else:
-                    coltype = int
+                    yield int
             elif dtype == self.FLOAT_DTYPE:
                 nansFilled = df[colname].fillna(0)
                 if (nansFilled.astype(int) == nansFilled).all():
-                    coltype = int
+                    yield int
                 else:
-                    coltype = float
+                    yield float
             else:
                 raise TypeError(dtype)
-            coltypes.append(core.TYPES_TO_POSTGRE[coltype])
-        return coltypes
