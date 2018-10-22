@@ -7,10 +7,12 @@ to the grid.'''
 argparser = rum.defaultArgumentParser(DESCRIPTION)
 argparser.add_argument('disag_table',
     help='table with polygon geometry and values to disaggregate')
-argparser.add_argument('disag_field', help='field in disag_table to disaggregate')
 argparser.add_argument('weight_table', help='weight table to be used')
-argparser.add_argument('weight_field', help='field in the weight table to be used')
 argparser.add_argument('output_table', help='table with output disaggregated values field')
+argparser.add_argument('-s', '--source-field', default=['value'], nargs='+',
+    help='field(s) in disag_table to disaggregate (default: value)')
+argparser.add_argument('-w', '--weight-field', default=['weight'], nargs='+',
+    help='field(s) in weight_table to disaggregate by (default: weight)')
 argparser.add_argument('-k', '--keep-unweighted', action='store_true',
     help='keep disaggregation features without an overlapping weight feature')
 argparser.add_argument('-r', '--relative', action='store_true',
@@ -21,8 +23,12 @@ argparser.add_argument('-o', '--overwrite', action='store_true',
 if __name__ == '__main__':
     args = argparser.parse_args()
     rum.util.RawDisaggregator.fromArgs(args).run(
-        args.disag_table, args.disag_field,
-        args.output_table,
-        args.weight_table, args.weight_field,
-        args.keep_unweighted, args.relative, args.overwrite
+        disagTable=args.disag_table,
+        disagFields=args.source_field,
+        outputTable=args.output_table,
+        weightTable=args.weight_table,
+        weightFields=args.weight_field,
+        keepUnweighted=args.keep_unweighted,
+        relative=args.relative,
+        overwrite=args.overwrite,
     )

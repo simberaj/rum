@@ -197,56 +197,93 @@ class FeatureConsolidator(core.DatabaseTask):
 class RawDisaggregator(core.DatabaseTask):
     disagPattern = sql.SQL('''CREATE TABLE {schema}.{outputTable} AS (
         WITH parts AS (SELECT
-            s.{disagField} AS src_value,
+            {partSource},
+            {partWeight},
             CASE WHEN t.geometry IS NULL THEN 1 ELSE
-                CASE WHEN t.{weightField} IS NULL THEN 0 ELSE t.{weightField} END
-                * st_area(st_intersection(t.geometry, s.geometry))
+                st_area(st_intersection(t.geometry, s.geometry))
                 / (
                     sum(st_area(st_intersection(t.geometry, s.geometry)))
                     OVER (PARTITION BY t.geometry)
                 )
-            END AS part_weight,
+            END AS part_area_fraction,
             CASE WHEN t.geometry IS NULL THEN s.geometry ELSE t.geometry END AS tgt_geometry,
             s.geometry AS src_geometry
         FROM {schema}.{disagTable} s
             {jointype} {schema}.{weightTable} t ON st_intersects(t.geometry, s.geometry)
         ),
         tcoefs AS (SELECT
-                max(src_value) / sum(part_weight) as tcoef, src_geometry
+                src_geometry,
+                {tcoef}
             FROM parts
             GROUP BY src_geometry
         ),
         grouped AS (SELECT
-                sum(p.part_weight * t.tcoef) AS value,
+                {result},
                 p.tgt_geometry as geometry
             FROM parts p
                 JOIN tcoefs t ON p.src_geometry=t.src_geometry
             GROUP BY p.tgt_geometry
         )
         SELECT
-            g.geometry, g.value, w.{weightColumns}
+            g.*, w.{transferColumns}
         FROM grouped g
             LEFT JOIN {schema}.{weightTable} w ON g.geometry=w.geometry
     )''')
-
-    def main(self, disagTable, disagField, outputTable, weightTable, weightField, keepUnweighted=False, relative=False, overwrite=False):
+    
+    namePatterns = {
+        'source' : '{source}',
+        'weight' : '{weight}',
+        'partsource' : 'src_{source}',
+        'partweight' : 'wt_{weight}',
+        'result' : '{source}_disag_{weight}',
+    }
+    snippetPatterns = {
+        'partSource' : sql.SQL('''s.{source} AS {partsource}'''),
+        'partWeight' : sql.SQL('''CASE
+            WHEN t.{weight} IS NULL THEN 0
+            ELSE t.{weight}
+        END AS {partweight}'''),
+        'tcoef' :      sql.SQL('''max({partsource}) / CASE 
+            WHEN sum({partweight} * part_area_fraction) = 0 THEN count(*)
+            ELSE sum({partweight} * part_area_fraction)
+        END AS {result}'''),
+        'result' :     sql.SQL('''sum(p.{partweight} * p.part_area_fraction * t.{result}) AS value'''),
+    }
+    
+    def main(self, disagTable, disagFields, outputTable, weightTable, weightFields, keepUnweighted=False, relative=False, overwrite=False):
         if relative:
             raise NotImplementedError
+        namesets = [
+            tuple(sql.Identifier(name) for name in nameset)
+            for nameset in sorted(set(
+                tuple(
+                    pattern.format(source=src, weight=wt)
+                    for key, pattern in self.namePatterns.items()
+                )
+                for src in disagFields for wt in weightFields
+            ))
+        ]
+        snippets = {
+            key : sql.SQL(',\n').join([
+                snippet.format(**dict(zip(self.namePatterns.keys(), nameset)))
+                for nameset in namesets
+            ])
+            for key, snippet in self.snippetPatterns.items()
+        }
         with self._connect() as cur:
             self.clearTable(cur, outputTable, overwrite=overwrite)
             disagQry = self.disagPattern.format(
                 schema=self.schemaSQL,
                 disagTable=sql.Identifier(disagTable),
-                disagField=sql.Identifier(disagField),
                 weightTable=sql.Identifier(weightTable),
-                weightField=sql.Identifier(weightField),
                 outputTable=sql.Identifier(outputTable),
-                weightColumns=sql.SQL(', w.').join(
+                transferColumns=sql.SQL(', w.').join(
                     sql.Identifier(col)
                     for col in self.getColumnNamesForTable(cur, weightTable)
                     if col != 'geometry'
                 ),
-                jointype=(sql.SQL('LEFT JOIN') if keepUnweighted else sql.SQL('INNER JOIN'))
+                jointype=(sql.SQL('LEFT JOIN') if keepUnweighted else sql.SQL('INNER JOIN')),
+                **snippets
             ).as_string(cur)
             self.logger.debug('disaggregating: %s', disagQry)
             cur.execute(disagQry)
