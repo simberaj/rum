@@ -247,7 +247,7 @@ class RawDisaggregator(core.DatabaseTask):
             WHEN sum({partweight} * part_area_fraction) = 0 THEN count(*)
             ELSE sum({partweight} * part_area_fraction)
         END AS {result}'''),
-        'result' :     sql.SQL('''sum(p.{partweight} * p.part_area_fraction * t.{result}) AS value'''),
+        'result' :     sql.SQL('''sum(p.{partweight} * p.part_area_fraction * t.{result}) AS {result}'''),
     }
     
     def main(self, disagTable, disagFields, outputTable, weightTable, weightFields, keepUnweighted=False, relative=False, overwrite=False):
