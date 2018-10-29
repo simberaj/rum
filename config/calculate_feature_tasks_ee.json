@@ -1,0 +1,35 @@
+{
+    "tasks" : [
+        {
+            "table" : "landboard",
+            "method" : "cov",
+            "case" : "type"
+        },
+        {
+            "table" : "housing_resid",
+            "method" : "cov"
+        },
+        {
+            "table" : "housing_resid",
+            "method" : "wavg",
+            "source" : [
+                "area",
+                "perim_index",
+                "fullness_index",
+                "depth_index",
+                "concavity_index",
+                "detour_index"
+            ]
+        },
+        {
+            "table" : "transport",
+            "method" : "len",
+            "case" : "class"
+        },
+        {
+            "table" : "poi",
+            "method" : "dens",
+            "case" : "type"
+        }
+    ]
+}

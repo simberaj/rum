@@ -129,37 +129,53 @@ class Model:
 
 
 class ModelTrainer(field.Handler):
-    def main(self, modeltype, targetTable, outpath, overwrite=False, **kwargs):
+    def main(self, modeltype, targetTable, outpath, seed=None, fraction=1, overwrite=False, **kwargs):
         if os.path.isfile(outpath) and not overwrite:
             raise IOError('model file {} already exists'.format(outpath))
+        if seed is not None:
+            numpy.random.seed(seed)
         model = Model(modeltype, **kwargs)
         model.setTargetName(targetTable[4:])
         with self._connect() as cur:
             featureNames = self.getConsolidatedFeatureNames(cur)
             model.setFeatureNames(featureNames)
-            self.logger.info('selecting training values')
-            features, target = self.selectFeaturesAndTarget(cur, featureNames, targetTable)
+            features, target = self.selectFeaturesAndTarget(
+                cur, featureNames, targetTable, fraction
+            )
             self.logger.info('training model')
             model.fit(features, target)
             self.logger.info('saving model to %s', outpath)
             with open(outpath, 'wb') as outfile:
                 model.save(outfile)
 
-    def selectFeaturesAndTarget(self, cur, featureNames, targetTable):
+    def selectFeaturesAndTarget(self, cur, featureNames, targetTable, fraction=1):
+        self.logger.info('selecting training values')
         feats = self.selectConsolidatedFeatures(cur, featureNames, inside=True).fillna(0).values
         targets = self.selectTarget(cur, targetTable, inside=True).fillna(0).values
-        return feats, targets
+        return self.restrictToFraction(feats, targets, fraction=fraction)
+        
+    def restrictToFraction(self, features, target, fraction=1):
+        if fraction < 1:
+            n_all = len(features)
+            n_sel = int(n_all * fraction)
+            if n_sel == 0:
+                raise ValueError('fraction too low: no samples selected')
+            rands = numpy.random.choice(n_all, n_sel, replace=False)
+            return features[rands], target[rands]
+        else:
+            return features, target
 
 
 class ModelArrayTrainer(ModelTrainer):
-    def main(self, targetTable, outpath, overwrite=False, **kwargs):
+    def main(self, targetTable, outpath, seed=None, fraction=1, overwrite=False, **kwargs):
         if not os.path.isdir(outpath):
             os.mkdir(outpath)
+        if seed is not None:
+            numpy.random.seed(seed)
         with self._connect() as cur:
             featureNames = self.getConsolidatedFeatureNames(cur)
-            self.logger.info('selecting training values')
             features, target = self.selectFeaturesAndTarget(
-                cur, featureNames, targetTable
+                cur, featureNames, targetTable, fraction
             )
             self.logger.info('training models to %s', outpath)
             for modeltype in Model.TYPES.keys():
@@ -354,4 +370,4 @@ class ModelIntrospector(core.Task):
         )
         for name, value in rowiter:
             if value:
-                print(name.ljust(leftcolwidth), value)
+                print(name.ljust(leftcolwidth), '{:.3%}'.format(value))
