@@ -234,12 +234,13 @@ class RawDisaggregator(core.DatabaseTask):
         'source' : '{source}',
         'weight' : '{weight}',
         'partsource' : 'src_{source}',
-        'partweight' : 'wt_{weight}',
+        'partweight' : '{source}_wt_{weight}',
         'result' : '{source}_disag_{weight}',
     }
     snippetPatterns = {
         'partSource' : sql.SQL('''s.{source} AS {partsource}'''),
         'partWeight' : sql.SQL('''CASE
+            WHEN t.geometry IS NULL THEN 1
             WHEN t.{weight} IS NULL THEN 0
             ELSE t.{weight}
         END AS {partweight}'''),
