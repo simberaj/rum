@@ -404,3 +404,68 @@ class BatchDisaggregator(Disaggregator):
             self.logger.debug('disaggregating batch: %s', qry)
             cur.execute(qry)
             self.createPrimaryKey(cur, outputTable)
+
+            
+            
+class TrainingSchemaMerger(core.DatabaseTask):
+    def main(self, source_schemas, target_tables, overwrite=False):
+        with self._connect() as cur:
+            self.createSchema(cur)
+            self.mergeAllFeaturesTables(cur, source_schemas, overwrite=overwrite)
+            self.mergeTargetTables(cur, source_schemas, target_tables, overwrite=overwrite)
+        
+    def mergeAllFeaturesTables(self, cur, source_schemas, overwrite=False):
+        self.logger.info('merging feature tables')
+        cols = {
+            schema : self.getColumnNamesForTable(cur, core.ALL_FEATS_TABLE, schema=schema)
+            for schema in source_schemas
+        }
+        all_cols = list(sorted(frozenset(
+            col for values in cols.values() for col in values
+        )))
+        all_ident = sql.Identifier(core.ALL_FEATS_TABLE)
+        qry = sql.SQL('''CREATE TABLE {schema}.{all_ident} AS ((
+            {contents}
+        ))''').format(
+            schema=self.schemaSQL,
+            all_ident=all_ident,
+            contents=sql.SQL('\n) UNION ALL (\n').join(
+                sql.SQL('''SELECT
+                    {colsegment}
+                FROM {schema}.{all_ident}''').format(
+                    schema=sql.Identifier(schema),
+                    all_ident=all_ident,
+                    colsegment=sql.SQL(',\n').join(
+                        (
+                            sql.SQL('NULL AS ') if col not in collist
+                            else sql.SQL('')
+                        ) + sql.Identifier(col)
+                        for col in all_cols
+                    ),
+                )
+                for schema, collist in cols.items()
+            ),
+        ).as_string(cur)
+        self.logger.debug('merging feature table query: %s', qry)
+        cur.execute(qry)
+        self.createPrimaryKey(cur, core.ALL_FEATS_TABLE)
+        
+    def mergeTargetTables(self, cur, source_schemas, target_tables, overwrite=False):
+        self.logger.info('merging target tables')
+        qry = sql.SQL('''CREATE TABLE {schema}.target AS ((
+            {contents}
+        ))''').format(
+            schema=self.schemaSQL,
+            contents=sql.SQL('\n) UNION ALL (\n').join(
+                sql.SQL('SELECT geohash, target FROM {schema}.{tgt}').format(
+                    schema=sql.Identifier(schema),
+                    tgt=sql.Identifier(tgt),
+                )
+                for schema, tgt in zip(source_schemas, target_tables)
+            )
+        ).as_string(cur)
+        self.logger.debug('merging target table query: %s', qry)
+        cur.execute(qry)
+        self.createPrimaryKey(cur, 'target')
+        
+        

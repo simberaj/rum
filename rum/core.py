@@ -23,6 +23,7 @@ DEFAULT_DB_CONF_PATH = configPath('dbconn.json')
 EXTENT_TABLE = 'extent'
 GRID_TABLE = 'grid'
 GEOMETRY_FIELD = 'geometry'
+ALL_FEATS_TABLE = 'all_feats'
 
 FEATURE_PREFIX = 'feat_'
 NEIGHBOUR_FEATURE_PREFIX = FEATURE_PREFIX + 'neigh_'
@@ -134,13 +135,13 @@ class DatabaseTask(Task):
         cur.execute(qry)
         return [row[0] for row in cur.fetchall()]
 
-    def getColumnNames(self, cur, where=None):
+    def getColumnNames(self, cur, where=None, schema=None):
         qry = sql.SQL('''
             SELECT table_name, column_name FROM information_schema.columns
             WHERE table_schema={schema} AND {where}
             ORDER BY table_name, ordinal_position;
         ''').format(
-            schema=sql.Literal(self.schema),
+            schema=sql.Literal(self.schema if schema is None else schema),
             where=where
         ).as_string(cur)
         self.logger.debug('selecting columns: %s', qry)
@@ -150,16 +151,14 @@ class DatabaseTask(Task):
             colnames.setdefault(table, []).append(column)
         return colnames
 
-    def getColumnNamesForTable(self, cur, table, where=None):
+    def getColumnNamesForTable(self, cur, table, where=None, schema=None):
         return self.getColumnNames(cur,
             where=sql.SQL('table_name={table} AND {where}').format(
                 table=sql.Literal(table),
                 where=(where if where else sql.SQL('TRUE'))
-            )
+            ),
+            schema=schema,
         ).get(table, [])
-
-    def getGridNames(self, cur, where=None):
-        return self.getColumnNamesForTable(cur, 'grid', where=None)
 
     def getFeatureNames(self, cur):
         return self.getColumnNames(cur,
@@ -208,6 +207,12 @@ class DatabaseTask(Task):
         ).as_string(cur)
         self.logger.debug('creating primary key: %s', qry)
         cur.execute(qry)
+    
+    def createSchema(self, cur):
+        cur.execute(sql.SQL('CREATE SCHEMA IF NOT EXISTS {}')
+            .format(self.schemaSQL).as_string(cur)
+        )
+
 
 
 class Initializer(DatabaseTask):
@@ -219,10 +224,9 @@ class Initializer(DatabaseTask):
                 if query: # disregard empty queries
                     self.logger.debug('initialization query: %s', query)
                     cur.execute(query)
-            cur.execute(sql.SQL('CREATE SCHEMA IF NOT EXISTS {}')
-                .format(self.schemaSQL).as_string(cur)
-            )
+            self.createSchema(cur)
 
+            
 class ExtentMaker(DatabaseTask):
     def main(self, table, overwrite=False):
         with self._connect() as cur:
