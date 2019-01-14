@@ -344,30 +344,62 @@ class Calibrator(field.Handler):
 
 class ModelIntrospector(core.Task):
     ITEMS = [
-        ('feature_importances_', 'feature importances', None),
-        ('coef_', 'coefficients', abs),
+        ('feature_importances_', ('feature importances', None, '{:.3%}')),
+        ('coef_', ('coefficients', abs, '{:.4g}')),
+    ]
+    
+    GROUPERS = [
+        ('source', lambda name: name.split('_')[0]),
+        ('range', lambda name: (
+            name[name.rfind('neigh')+6:] if 'neigh' in name else 'none'
+        )),
     ]
 
-    def main(self, modelfile):
+    def main(self, modelfile, add_grouped=False):
         model = Model.load(modelfile)
         coreModel = model.getRegressor()
         featnames = model.getFeatureNames(intercept=True)
         reported = False
-        for attr, name, sorter in self.ITEMS:
+        for attr, settings in self.ITEMS:
             if hasattr(coreModel, attr):
-                self.report(featnames, getattr(coreModel, attr), name, sorter)
+                self.report(
+                    featnames,
+                    getattr(coreModel, attr),
+                    *settings,
+                    add_grouped=add_grouped
+                )
                 reported = True
         if not reported:
             print('*** No introspectable attribute found')
 
-    def report(self, names, values, label, sorter=None):
-        leftcolwidth = min(max(len(name) for name in names) + 1, 60)
-        print('Model', label, '({} features)'.format(len(names)))
-        print()
-        rowiter = sorted(zip(names, values),
-            key=((lambda t: sorter(t[1])) if sorter else operator.itemgetter(1)),
-            reverse=True
+    def report(self, names, values, label, transformer=None, formatter='{}', add_grouped=False):
+        df = pd.DataFrame({'feature' : names, 'value' : values})
+        df['transformed'] = df.value.map(transformer) if transformer else df.value
+        df.sort_values('transformed', ascending=False, inplace=True)
+        self.display(df, 'feature', ['value'],
+                     'Model {} ({} features)'.format(label, len(df.index)),
+                     formatter
         )
-        for name, value in rowiter:
-            if value:
-                print(name.ljust(leftcolwidth), '{:.3%}'.format(value))
+        if add_grouped:
+            for grpname, grouper in self.GROUPERS:
+                df[grpname] = df['feature'].map(grouper)
+                grouped_df = df.groupby(grpname).agg({
+                    'value' : sum,
+                    'transformed' : sum
+                }).reset_index().sort_values('transformed', ascending=False)
+                self.display(grouped_df, grpname, ['transformed', 'value'],
+                             'Grouped {} by {}'.format(label, grpname),
+                             formatter
+                )
+        
+    def display(self, df, keyname, valnames, title, formatter):
+        print()
+        print(title)
+        print()
+        leftcolwidth = min(df[keyname].map(len).max(), 60)
+        for index, row in df.iterrows():
+            if row[valnames[0]]:
+                print(row[keyname].ljust(leftcolwidth), end=' ')
+                for valname in valnames:
+                    print(formatter.format(row[valname]), end=' ')
+                print()
