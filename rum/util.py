@@ -408,13 +408,35 @@ class BatchDisaggregator(Disaggregator):
             
             
 class TrainingSchemaMerger(core.DatabaseTask):
+    TARGET_TABLE = 'target'
+
     def main(self, source_schemas, target_tables, overwrite=False):
         with self._connect() as cur:
             self.createSchema(cur)
             self.mergeAllFeaturesTables(cur, source_schemas, overwrite=overwrite)
-            self.mergeTargetTables(cur, source_schemas, target_tables, overwrite=overwrite)
+            self.logger.info('merging target tables')
+            self.mergeTables(
+                cur,
+                source_schemas,
+                target_tables,
+                self.TARGET_TABLE,
+                fields=['geohash', 'target'],
+                doPrimaryKey=True,
+                overwrite=overwrite,
+            )
+            self.logger.info('merging grids')
+            self.mergeTables(
+                cur,
+                source_schemas,
+                'grid',
+                'grid',
+                fields=['geohash', 'inside'],
+                doPrimaryKey=True,
+                overwrite=overwrite,
+            )
         
     def mergeAllFeaturesTables(self, cur, source_schemas, overwrite=False):
+        self.clearTable(cur, core.ALL_FEATS_TABLE, overwrite=overwrite)
         self.logger.info('merging feature tables')
         cols = {
             schema : self.getColumnNamesForTable(cur, core.ALL_FEATS_TABLE, schema=schema)
@@ -450,22 +472,29 @@ class TrainingSchemaMerger(core.DatabaseTask):
         cur.execute(qry)
         self.createPrimaryKey(cur, core.ALL_FEATS_TABLE)
         
-    def mergeTargetTables(self, cur, source_schemas, target_tables, overwrite=False):
-        self.logger.info('merging target tables')
-        qry = sql.SQL('''CREATE TABLE {schema}.target AS ((
+    def mergeTables(self, cur, source_schemas, source_tables, target_table, fields, doPrimaryKey=False, overwrite=False):
+        if isinstance(source_tables, str):
+            source_tables = [source_tables] * len(source_schemas)
+        self.clearTable(cur, target_table, overwrite=overwrite)
+        qry = sql.SQL('''CREATE TABLE {schema}.{tblname} AS ((
             {contents}
         ))''').format(
             schema=self.schemaSQL,
+            tblname=sql.Identifier(target_table),
             contents=sql.SQL('\n) UNION ALL (\n').join(
-                sql.SQL('SELECT geohash, target FROM {schema}.{tgt}').format(
+                sql.SQL('SELECT {fields} FROM {schema}.{tgt}').format(
                     schema=sql.Identifier(schema),
                     tgt=sql.Identifier(tgt),
+                    fields=sql.SQL(', ').join(
+                        sql.Identifier(field) for field in fields
+                    ),
                 )
-                for schema, tgt in zip(source_schemas, target_tables)
+                for schema, tgt in zip(source_schemas, source_tables)
             )
         ).as_string(cur)
-        self.logger.debug('merging target table query: %s', qry)
+        self.logger.debug('table merge query: %s', qry)
         cur.execute(qry)
-        self.createPrimaryKey(cur, 'target')
+        if doPrimaryKey:
+            self.createPrimaryKey(cur, target_table)
         
         
