@@ -21,6 +21,8 @@ import pandas as pd
 import shapely.geometry
 import shapely.speedups
 import shapely.geos
+import shapely.prepared
+import rasterio
 if shapely.speedups.available:
     shapely.speedups.enable()
 
@@ -733,7 +735,7 @@ class BaseLayerImporter(Importer):
         return writer
 
     def getFieldDefs(self, fieldDict):
-        fdict = collections.OrderedDict([])
+        fdict = {}
         for name, typedef in fieldDict.items():
             if ':' in typedef:
                 typename, typesize = typedef.split(':')
@@ -786,8 +788,71 @@ class BaseLayerImporter(Importer):
 
 
 class RasterImporter(BaseLayerImporter):
-    def main(self, path, table, encoding=None, clipExtent=False, sourceSRID=None, **kwargs):
-        raise NotImplementedError
+    def main(self, path, table, bands=None, point=False, clipExtent=False, sourceSRID=None, **kwargs):
+        with self._connect() as cur, rasterio.open(path) as dataset:
+            if not sourceSRID:
+                sourceSRID = self.getSourceSRID(cur, dataset.crs)
+            if bands is None:
+                bands = list(dataset.indexes)
+            outType = self.outputType(dataset)
+            writer = self.createWriter(table,
+                metaschema={'geometry' : 'Point' if point else 'Polygon'},
+                fields={
+                    'band_' + str(band) : (outType, None)
+                    for band in bands
+                },
+                sourceSRID=sourceSRID,
+                **kwargs
+            )
+            if clipExtent:
+                filter = self.createGeometryFilter(cur, sourceSRID)
+            else:
+                filter = lambda geom: True
+            geomProducer = self.createGeometryProducer(dataset.transform, point=point)
+            data = {band : dataset.read(band) for band in bands}
+            with writer.open(cur):
+                self.logger.debug('starting feature import')
+                for i, j in zip(*numpy.nonzero(dataset.dataset_mask())):
+                    geom = geomProducer(j,i)
+                    if filter(geom):
+                        writer.write({
+                            # type: Feature can be omitted, Writer never checks
+                            'properties' : {
+                                'band_' + str(band) : float(data[band][i,j])
+                                for band in bands
+                            },
+                            'geometry' : geom,
+                        })
+
+    def outputType(self, dataset):
+        dtypes = set(dataset.dtypes)
+        if any(dtype.startswith('float') for dtype in dtypes):
+            return 'double precision'
+        elif all(dtype.startswith('int') or dtype.startswith('uint') for dtype in dtypes):
+            return 'int'
+        else:
+            raise TypeError('unknown raster types: ' + str(dtypes))
+    
+    def createGeometryProducer(self, transformation, point=False):
+        if point:
+            def togeom(*coords):
+                return shapely.geometry.Point(*(transformation * (numpy.array(coords) + .5)))
+        else:
+            def togeom(*coords):
+                i, j = coords
+                return shapely.geometry.Polygon([
+                    transformation * (i,j),
+                    transformation * (i+1,j),
+                    transformation * (i+1,j+1),
+                    transformation * (i,j+1),
+                ])
+        return togeom
+        
+    def createGeometryFilter(self, cur, sourceSRID):
+        bbox = self.getExtentBBox(cur, sourceSRID)
+        poly = shapely.prepared.prep(shapely.geometry.box(*bbox))
+        return poly.intersects
+        
             
             
 class LayerImporter(BaseLayerImporter):
