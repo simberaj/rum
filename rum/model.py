@@ -256,29 +256,48 @@ class ModelApplier(field.Handler):
 
 
 class ModelArrayApplier(ModelApplier):
-    def main(self, modelDirPath, weightTable, overwrite=False):
+    def main(self, modelDirPath, weightTable, modelNames=None, featuresDiffer=False, overwrite=False):
         with self._connect() as cur:
-            modelIter = self.loadModels(modelDirPath)
-            self.logger.info('selecting features')
-            model = next(modelIter)
-            features, ids = self.selectFeaturesAndIds(cur, model.getFeatureNames())
+            models = list(self.loadModels(modelDirPath))
+            if not modelNames:
+                modelNames = [model.typename for model in models]
+                if len(frozenset(modelNames)) < len(models):
+                    raise ValueError('could not identify model names from types, need explicit names')
+            if not featuresDiffer:
+                self.logger.info('selecting features')
+                features, ids = self.selectFeaturesAndIds(cur, models[0].getFeatureNames())
+                weightValues = [numpy.array(ids)]
+            else:
+                weightValues = []
             weightFields = []
-            weightValues = [numpy.array(ids)]
-            while True:
-                self.logger.info('running %s', model.typename)
-                # weightField = 'weight_{}'.format(model.typename)
-                weightField = model.typename
+            for model, modelName in zip(models, modelNames):
+                self.logger.info('running %s', modelName)
+                if featuresDiffer:
+                    features, ids = self.selectFeaturesAndIds(cur, model.getFeatureNames())
+                    if not weightValues:
+                        weightValues.append(numpy.array(ids))
                 weights = model.predict(features)
-                weightFields.append(weightField)
+                weightFields.append(modelName)
                 weightValues.append(weights)
-                try:
-                    model = next(modelIter)
-                except StopIteration:
-                    break
             self.saveMultipleWeights(
                 cur, weightTable, weightFields, weightValues, overwrite=overwrite
             )
-
+            
+    # def getModelNames(self, models):
+        # typenames = 
+        # if len(frozenset(typenames)) < len(models):
+            # featprefixes = [os.path.commonprefix(model.getFeatureNames()) for model in models]
+            # print(featprefixes)
+            # if '' in featprefixes or len(frozenset(featprefixes)) < len(models):
+                # self.logger.warn('model naming not found, inferring numbers')
+                # return ['model_' + str(i) for i in range(1, len(models)+1)]
+            # else:
+                # self.logger.info('model names inferred: %s', ', '.join(featprefixes))
+                # raise NotImplementedError
+                # return featprefixes
+        # else:
+            # return typenames
+        
     def saveMultipleWeights(self, cur, table, fields, values, overwrite=False):
         self.clearTable(cur, table, overwrite)
         params = {
@@ -304,7 +323,7 @@ class ModelArrayApplier(ModelApplier):
 
     def loadModels(self, path):
         self.logger.info('loading models from %s', path)
-        for fileName in os.listdir(path):
+        for fileName in sorted(os.listdir(path)):
             try:
                 yield Model.load(os.path.join(path, fileName))
             except pickle.UnpicklingError:
