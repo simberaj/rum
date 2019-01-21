@@ -353,6 +353,9 @@ class ModelIntrospector(core.Task):
         ('range', lambda name: (
             name[name.rfind('neigh')+6:] if 'neigh' in name else 'none'
         )),
+        ('core feature', lambda name: (
+            name[:name.rfind('neigh')-1] if 'neigh' in name else name
+        )),
     ]
 
     def main(self, modelfile, add_grouped=False):
