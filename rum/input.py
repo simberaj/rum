@@ -24,12 +24,13 @@ import shapely.geos
 if shapely.speedups.available:
     shapely.speedups.enable()
 
+# so that shapely does not output zero-filled Z dimension which wreaks havoc
+# on the subsequent steps
 shapely.geos.WKBWriter.defaults['output_dimension'] = 2
 
 from . import core, attribute
 
 WGS84_SRID = 4326
-
 
 
 class DataImportError(core.Error):
@@ -784,6 +785,11 @@ class BaseLayerImporter(Importer):
             return source
 
 
+class RasterImporter(BaseLayerImporter):
+    def main(self, path, table, encoding=None, clipExtent=False, sourceSRID=None, **kwargs):
+        raise NotImplementedError
+            
+            
 class LayerImporter(BaseLayerImporter):
     SIZELESS_TYPES = {
         'int' : 'int',
