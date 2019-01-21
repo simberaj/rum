@@ -2,6 +2,7 @@ import os
 import pickle
 import gzip
 import operator
+import re
 
 import numpy
 import scipy.optimize
@@ -129,7 +130,7 @@ class Model:
 
 
 class ModelTrainer(field.Handler):
-    def main(self, modeltype, targetTable, outpath, seed=None, fraction=1, overwrite=False, **kwargs):
+    def main(self, modeltype, targetTable, outpath, seed=None, fraction=1, feature_regex=None, overwrite=False, **kwargs):
         if os.path.isfile(outpath) and not overwrite:
             raise IOError('model file {} already exists'.format(outpath))
         if seed is not None:
@@ -137,17 +138,27 @@ class ModelTrainer(field.Handler):
         model = Model(modeltype, **kwargs)
         model.setTargetName(targetTable[4:])
         with self._connect() as cur:
-            featureNames = self.getConsolidatedFeatureNames(cur)
+            featureNames = self.getTrainingFeatureNames(cur, feature_regex)
+            if not featureNames:
+                raise ValueError('no features found')
             model.setFeatureNames(featureNames)
             features, target = self.selectFeaturesAndTarget(
                 cur, featureNames, targetTable, fraction
             )
-            self.logger.info('training model')
+            self.logger.info('training model on %d features', len(featureNames))
             model.fit(features, target)
             self.logger.info('saving model to %s', outpath)
             with open(outpath, 'wb') as outfile:
                 model.save(outfile)
 
+    def getTrainingFeatureNames(self, cur, regex):
+        all_feats = self.getConsolidatedFeatureNames(cur)
+        if regex:
+            pattern = re.compile(regex)
+            return [feat for feat in all_feats if pattern.fullmatch(feat)]
+        else:
+            return all_feats
+                
     def selectFeaturesAndTarget(self, cur, featureNames, targetTable, fraction=1):
         self.logger.info('selecting training values')
         feats = self.selectConsolidatedFeatures(cur, featureNames, inside=True).fillna(0).values
@@ -167,13 +178,13 @@ class ModelTrainer(field.Handler):
 
 
 class ModelArrayTrainer(ModelTrainer):
-    def main(self, targetTable, outpath, seed=None, fraction=1, overwrite=False, **kwargs):
+    def main(self, targetTable, outpath, seed=None, fraction=1, feature_regex=None, overwrite=False, **kwargs):
         if not os.path.isdir(outpath):
             os.mkdir(outpath)
         if seed is not None:
             numpy.random.seed(seed)
         with self._connect() as cur:
-            featureNames = self.getConsolidatedFeatureNames(cur)
+            featureNames = self.getTrainingFeatureNames(cur, feature_regex)
             features, target = self.selectFeaturesAndTarget(
                 cur, featureNames, targetTable, fraction
             )

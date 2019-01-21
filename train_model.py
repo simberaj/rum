@@ -3,7 +3,9 @@ import rum.model
 
 DESCRIPTION = '''Trains a predictive model for disaggregation weights.
 
-Takes all f*_ fields as features a specified target field from the grid.
+Takes the fields from the consolidated feature table (all_feats) as features
+and the "target" field from a selected target table as the target, joining
+both tables on the geohash key.
 
 The following model types are available:
 
@@ -19,6 +21,9 @@ argparser.add_argument('file', help='file to save the trained model to')
 argparser.add_argument('-f', '--fraction', type=float, default=1,
     help='fraction of input samples to be used for training'
 )
+argparser.add_argument('-r', '--feat-regex',
+    help='regular expression selecting only some consolidated features for training'
+)
 argparser.add_argument('-s', '--seed', type=int, 
     help='seed for random generator (initializes the models and sample selection)'
 )
@@ -31,6 +36,7 @@ if __name__ == '__main__':
     rum.model.ModelTrainer.fromArgs(args).run(
         args.model_type, args.target_table, args.file,
         fraction=args.fraction,
+        feature_regex=args.feat_regex,
         seed=args.seed,
         overwrite=args.overwrite
     )
