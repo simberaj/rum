@@ -63,6 +63,28 @@ class ShapeCalculator(core.DatabaseTask):
                     qry = sql.SQL(pattern).format(**params).as_string(cur)
                     cur.execute(qry)
 
+                    
+class Dissolver(core.DatabaseTask):
+    QRY = sql.SQL('''CREATE TABLE {schema}.{tgt} AS SELECT
+        st_multi(
+            (st_dump(st_union(geometry))).geom
+        )::geometry(multipolygon,{srid}) as geometry
+    FROM {schema}.{src};
+    ''')
+
+    def main(self, source_table, target_table, overwrite=False):
+        with self._connect() as cur:
+            qry = self.QRY.format(
+                schema=self.schemaSQL,
+                src=sql.Identifier(source_table),
+                tgt=sql.Identifier(target_table),
+                srid=sql.Literal(self.getSRID(cur, source_table)),
+            ).as_string(cur)
+            self.clearTable(cur, target_table, overwrite=overwrite)
+            self.logger.debug('dissolving %s to %s: %s', source_table, target_table, qry)
+            cur.execute(qry)
+            
+                    
 class FeatureLister(core.DatabaseTask):
     def main(self, consolidated=False):
         hasCondition = False
