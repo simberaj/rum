@@ -164,6 +164,23 @@ class DatabaseTask(Task):
         return self.getColumnNames(cur,
             where=sql.SQL("table_name LIKE 'feat_%' AND column_name<>'geohash'")
         )
+        
+    def getSRID(self, cur, table, geomField=GEOMETRY_FIELD):
+        qry = sql.SQL(
+            "SELECT Find_SRID({schema}, {table}, {geomField});"
+        ).format(
+            schema=sql.Literal(self.schema),
+            table=sql.Literal(table),
+            geomField=sql.Literal(geomField),
+        ).as_string(cur)
+        self.logger.debug('determining SRID of %s: %s', table, qry)
+        cur.execute(qry)
+        # there is an extent defined, make the imported data conform to its CRS
+        result = cur.fetchone()
+        if result is None:
+            raise ValueError('table {} does not exist'.format(table))
+        else:
+            return result[0]
 
     def getConsolidatedFeatureNames(self, cur, condition=False):
         return [col
