@@ -716,7 +716,7 @@ class OSMParser(xml.sax.handler.ContentHandler):
 
 
 class BaseLayerImporter(Importer):
-    def createWriter(self, table, metaschema, fields=None, sourceSRID=None, targetSRID=None, forcedGeometryType=None, overwrite=False):
+    def createWriter(self, table, metaschema, fields=None, forcedGeometryType=None, **kwargs):
         if fields is None:
             fields = self.getFieldDefs(metaschema['properties'])
         geomtype = metaschema['geometry']
@@ -727,9 +727,7 @@ class BaseLayerImporter(Importer):
             self.schema, table,
             fields=fields,
             geomtype=geomtype,
-            sourceSRID=sourceSRID,
-            targetSRID=targetSRID,
-            overwrite=overwrite
+            **kwargs
         )
         writer.logTo(self.logger)
         return writer
@@ -788,18 +786,20 @@ class BaseLayerImporter(Importer):
 
 
 class RasterImporter(BaseLayerImporter):
-    def main(self, path, table, bands=None, point=False, clipExtent=False, sourceSRID=None, **kwargs):
+    def main(self, path, table, bands=None, names=None, point=False, clipExtent=False, sourceSRID=None, **kwargs):
         with self._connect() as cur, rasterio.open(path) as dataset:
             if not sourceSRID:
                 sourceSRID = self.getSourceSRID(cur, dataset.crs)
             if bands is None:
                 bands = list(dataset.indexes)
             outType = self.outputType(dataset)
+            if names is None:
+                names = ['band_' + str(band) for band in bands]
             writer = self.createWriter(table,
                 metaschema={'geometry' : 'Point' if point else 'Polygon'},
                 fields={
-                    'band_' + str(band) : (outType, None)
-                    for band in bands
+                    name : (outType, None)
+                    for name in names
                 },
                 sourceSRID=sourceSRID,
                 **kwargs
@@ -810,6 +810,7 @@ class RasterImporter(BaseLayerImporter):
                 filter = lambda geom: True
             geomProducer = self.createGeometryProducer(dataset.transform, point=point)
             data = {band : dataset.read(band) for band in bands}
+            banditer = list(zip(names, bands))
             with writer.open(cur):
                 self.logger.debug('starting feature import')
                 for i, j in zip(*numpy.nonzero(dataset.dataset_mask())):
@@ -818,8 +819,8 @@ class RasterImporter(BaseLayerImporter):
                         writer.write({
                             # type: Feature can be omitted, Writer never checks
                             'properties' : {
-                                'band_' + str(band) : float(data[band][i,j])
-                                for band in bands
+                                name : float(data[band][i,j])
+                                for name, band in banditer
                             },
                             'geometry' : geom,
                         })
@@ -923,7 +924,7 @@ class Writer:
         'point', 'linestring', 'multilinestring', 'polygon', 'multipolygon'
     ]
 
-    def __init__(self, schema, table, fields, geomtype, sourceSRID=None, targetSRID=None, overwrite=False):
+    def __init__(self, schema, table, fields, geomtype, sourceSRID=None, targetSRID=None, append=False, overwrite=False):
         self.schema = schema
         self.schemaSQL = sql.Identifier(self.schema)
         self.table = table
@@ -935,6 +936,7 @@ class Writer:
         self.sourceSRID = sourceSRID
         self.userTargetSRID = targetSRID
         self.targetSRID = None
+        self.append = append
         self.overwrite = overwrite
         self.cursor = None
         self.logger = core.EmptyLogger()
@@ -978,7 +980,10 @@ class Writer:
         if self.overwrite:
             delqry = sql.SQL('''DROP TABLE IF EXISTS {tabledef}''').format(tabledef=tabledef)
             self.cursor.execute(delqry)
-        start = sql.SQL('''CREATE TABLE {tabledef} (''').format(tabledef=tabledef)
+        start = sql.SQL('''CREATE TABLE{ifnex} {tabledef} (''').format(
+            tabledef=tabledef,
+            ifnex=(sql.SQL(' IF NOT EXISTS') if self.append else sql.SQL('')),
+        )
         fieldDefs = sql.SQL(', ').join(
             list(self.createFieldPart(self.fields)) +
             [sql.SQL('{geomField} geometry({geomtype},{srid})').format(
@@ -1008,9 +1013,10 @@ class Writer:
         self.logger.debug('creating spatial index for %s', self.tablepath)
         indexName = '{}_{}_gix'.format(self.schema, self.table)
         qry = sql.SQL('''
-            CREATE INDEX {indexname}
+            CREATE INDEX{ifnex} {indexname}
             ON {schema}.{table} USING GIST ({geomcol});
         ''').format(
+            ifnex=(sql.SQL(' IF NOT EXISTS') if self.append else sql.SQL('')),
             indexname=sql.Identifier(indexName),
             schema=self.schemaSQL,
             table=sql.Identifier(self.table),
