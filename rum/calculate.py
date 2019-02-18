@@ -342,7 +342,6 @@ class NeighbourhoodCalculator(Calculator):
         allTables = set(allFeats.keys())
         for featTable, featColumns in allFeats.items():
             if not featTable.startswith('feat_neigh_'):
-                todos = []
                 for col in featColumns:
                     neighTable = self.neighTableName(featTable, col)
                     if overwrite or neighTable not in allTables:
