@@ -130,7 +130,7 @@ class Model:
 
 
 class ModelTrainer(field.Handler):
-    def main(self, modeltype, targetTable, outpath, seed=None, fraction=1, feature_regex=None, overwrite=False, **kwargs):
+    def main(self, modeltype, targetTable, outpath, seed=None, fraction=1, feature_regex=None, overwrite=False, condition=True, **kwargs):
         if os.path.isfile(outpath) and not overwrite:
             raise IOError('model file {} already exists'.format(outpath))
         if seed is not None:
@@ -143,7 +143,7 @@ class ModelTrainer(field.Handler):
                 raise ValueError('no features found')
             model.setFeatureNames(featureNames)
             features, target = self.selectFeaturesAndTarget(
-                cur, featureNames, targetTable, fraction
+                cur, featureNames, targetTable, fraction, condition=condition
             )
             self.logger.info('training model on %d features', len(featureNames))
             model.fit(features, target)
@@ -158,13 +158,23 @@ class ModelTrainer(field.Handler):
             return [feat for feat in all_feats if pattern.fullmatch(feat)]
         else:
             return all_feats
-                
-    def selectFeaturesAndTarget(self, cur, featureNames, targetTable, fraction=1):
+
+    def selectFeaturesAndTarget(self, cur, featureNames, targetTable, fraction=1, condition=True):
         self.logger.info('selecting training values')
-        feats = self.selectConsolidatedFeatures(cur, featureNames, inside=True).fillna(0).values
-        targets = self.selectTarget(cur, targetTable, inside=True).fillna(0).values
+        feats = self.selectConsolidatedFeatures(
+            cur,
+            featureNames,
+            inside=True,
+            condition=condition
+        ).fillna(0).values
+        targets = self.selectTarget(
+            cur,
+            targetTable,
+            inside=True,
+            condition=condition
+        ).fillna(0).values
         return self.restrictToFraction(feats, targets, fraction=fraction)
-        
+
     def restrictToFraction(self, features, target, fraction=1):
         if fraction < 1:
             n_all = len(features)
@@ -178,7 +188,7 @@ class ModelTrainer(field.Handler):
 
 
 class ModelArrayTrainer(ModelTrainer):
-    def main(self, targetTable, outpath, seed=None, fraction=1, feature_regex=None, overwrite=False, **kwargs):
+    def main(self, targetTable, outpath, seed=None, fraction=1, feature_regex=None, overwrite=False, condition=True, **kwargs):
         if not os.path.isdir(outpath):
             os.mkdir(outpath)
         if seed is not None:
@@ -186,7 +196,7 @@ class ModelArrayTrainer(ModelTrainer):
         with self._connect() as cur:
             featureNames = self.getTrainingFeatureNames(cur, feature_regex)
             features, target = self.selectFeaturesAndTarget(
-                cur, featureNames, targetTable, fraction
+                cur, featureNames, targetTable, fraction, condition=condition
             )
             self.logger.info('training models to %s', outpath)
             for modeltype in Model.TYPES.keys():
@@ -206,18 +216,18 @@ class ModelArrayTrainer(ModelTrainer):
 
 
 class ModelApplier(field.Handler):
-    def main(self, modelPath, weightTable, overwrite=False):
+    def main(self, modelPath, weightTable, overwrite=False, condition=True):
         self.logger.info('loading models from %s', modelPath)
         model = Model.load(modelPath)
         with self._connect() as cur:
             self.logger.info('selecting features')
-            features, ids = self.selectFeaturesAndIds(cur, model.getFeatureNames())
+            features, ids = self.selectFeaturesAndIds(cur, model.getFeatureNames(), condition=condition)
             self.logger.info('predicting weights')
             weights = model.predict(features)
             self.logger.info('saving weights')
             self.saveWeights(cur, weightTable, ids, weights, overwrite=overwrite)
 
-    def selectFeaturesAndIds(self, cur, featureNames):
+    def selectFeaturesAndIds(self, cur, featureNames, condition=True):
         currentNames = self.getConsolidatedFeatureNames(cur)
         missings = []
         founds = []
@@ -227,7 +237,7 @@ class ModelApplier(field.Handler):
             else:
                 missings.append(name)
                 self.logger.warn('feature %s from model not found in target schema, imputing zeros', name)
-        data = self.selectConsolidatedFeatures(cur, founds + ['geohash'])
+        data = self.selectConsolidatedFeatures(cur, founds + ['geohash'], condition=condition)
         ids = data['geohash'].tolist()
         data.drop('geohash', axis=1, inplace=True)
         data.fillna(0, inplace=True)
@@ -256,7 +266,7 @@ class ModelApplier(field.Handler):
 
 
 class ModelArrayApplier(ModelApplier):
-    def main(self, modelDirPath, weightTable, modelNames=None, featuresDiffer=False, overwrite=False):
+    def main(self, modelDirPath, weightTable, modelNames=None, featuresDiffer=False, overwrite=False, condition=True):
         with self._connect() as cur:
             models = list(self.loadModels(modelDirPath))
             if not modelNames:
@@ -265,7 +275,7 @@ class ModelArrayApplier(ModelApplier):
                     raise ValueError('could not identify model names from types, need explicit names')
             if not featuresDiffer:
                 self.logger.info('selecting features')
-                features, ids = self.selectFeaturesAndIds(cur, models[0].getFeatureNames())
+                features, ids = self.selectFeaturesAndIds(cur, models[0].getFeatureNames(), condition=condition)
                 weightValues = [numpy.array(ids)]
             else:
                 weightValues = []
@@ -273,7 +283,7 @@ class ModelArrayApplier(ModelApplier):
             for model, modelName in zip(models, modelNames):
                 self.logger.info('running %s', modelName)
                 if featuresDiffer:
-                    features, ids = self.selectFeaturesAndIds(cur, model.getFeatureNames())
+                    features, ids = self.selectFeaturesAndIds(cur, model.getFeatureNames(), condition=condition)
                     if not weightValues:
                         weightValues.append(numpy.array(ids))
                 weights = model.predict(features)
@@ -282,9 +292,9 @@ class ModelArrayApplier(ModelApplier):
             self.saveMultipleWeights(
                 cur, weightTable, weightFields, weightValues, overwrite=overwrite
             )
-            
+
     # def getModelNames(self, models):
-        # typenames = 
+        # typenames =
         # if len(frozenset(typenames)) < len(models):
             # featprefixes = [os.path.commonprefix(model.getFeatureNames()) for model in models]
             # print(featprefixes)
@@ -297,7 +307,7 @@ class ModelArrayApplier(ModelApplier):
                 # return featprefixes
         # else:
             # return typenames
-        
+
     def saveMultipleWeights(self, cur, table, fields, values, overwrite=False):
         self.clearTable(cur, table, overwrite)
         params = {
@@ -370,14 +380,12 @@ class Calibrator(field.Handler):
             cur.execute(qry, [data[idField].values.tolist(), fitted.tolist()])
 
 
-
-
 class ModelIntrospector(core.Task):
     ITEMS = [
         ('feature_importances_', ('feature importances', None, '{:.3%}')),
         ('coef_', ('coefficients', abs, '{:.4g}')),
     ]
-    
+
     GROUPERS = [
         ('source', lambda name: name.split('_')[0]),
         ('range', lambda name: (
@@ -424,7 +432,7 @@ class ModelIntrospector(core.Task):
                              'Grouped {} by {}'.format(label, grpname),
                              formatter
                 )
-        
+
     def display(self, df, keyname, valnames, title, formatter):
         print()
         print(title)

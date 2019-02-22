@@ -9,6 +9,9 @@ argparser.add_argument('weight_table', help='weight table to be computed')
 argparser.add_argument('-D', '--features-differ', action='store_true',
     help='models use different feature sets, select features each time'
 )
+argparser.add_argument('-C', '--no-condition', action='store_true',
+    help='do not use modeling condition even if present'
+)
 argparser.add_argument('-n', '--names', nargs='+',
     help='names for the models and their outputs (fields in weight table)'
 )
@@ -24,4 +27,5 @@ if __name__ == '__main__':
         modelNames=args.names,
         featuresDiffer=args.features_differ,
         overwrite=args.overwrite,
+        condition=(not args.no_condition),
     )

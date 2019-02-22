@@ -21,6 +21,9 @@ argparser.add_argument('file', help='file to save the trained model to')
 argparser.add_argument('-f', '--fraction', type=float, default=1,
     help='fraction of input samples to be used for training'
 )
+argparser.add_argument('-C', '--no-condition', action='store_true',
+    help='do not use modeling condition even if present'
+)
 argparser.add_argument('-r', '--feat-regex',
     help='regular expression selecting only some consolidated features for training'
 )
@@ -38,5 +41,6 @@ if __name__ == '__main__':
         fraction=args.fraction,
         feature_regex=args.feat_regex,
         seed=args.seed,
-        overwrite=args.overwrite
+        overwrite=args.overwrite,
+        condition=(not args.no_condition),
     )

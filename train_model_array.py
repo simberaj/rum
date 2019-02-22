@@ -25,6 +25,9 @@ argparser.add_argument('-s', '--seed', type=int,
 argparser.add_argument('-o', '--overwrite', action='store_true',
     help='overwrite existing model files'
 )
+argparser.add_argument('-C', '--no-condition', action='store_true',
+    help='do not use modeling condition even if present'
+)
 
 if __name__ == '__main__':
     args = argparser.parse_args()
@@ -32,5 +35,6 @@ if __name__ == '__main__':
         args.target_table, args.dir,
         fraction=args.fraction,
         seed=args.seed,
-        overwrite=args.overwrite
+        overwrite=args.overwrite,
+        condition=(not args.no_condition),
     )
