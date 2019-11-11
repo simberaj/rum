@@ -1,10 +1,14 @@
 import rum
 import rum.input
 
-DESCRIPTION = '''Imports a regular spatial data file into PostGIS/RUM.
+DESCRIPTION = '''Imports mutiple regular spatial data files into PostGIS/RUM.
 
-Opens any spatial data file readable through GDAL/OGR/Fiona and imports its
-contents into the specified schema. If an extent file is already present in
+Opens an assorted set of spatial data files readable through GDAL/OGR/Fiona and
+imports their contents into a single table in the specified schema. Also merges
+a field in the source files into a single table column, applying translation
+on its values.
+
+If an extent file is already present in
 the schema and an import reprojection SRID is not given, reprojects the data
 into the extent CRS.
 '''

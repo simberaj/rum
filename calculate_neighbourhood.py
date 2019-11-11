@@ -1,7 +1,7 @@
 import rum
 import rum.calculate
 
-DESCRIPTION = '''Disaggregates values from a layer to grid using predicted weights.'''
+DESCRIPTION = '''Calculate neighbourhood features by Gaussian averaging.'''
 
 argparser = rum.defaultArgumentParser(DESCRIPTION)
 argparser.add_argument('multipliers', metavar='multiplier', type=float, nargs='+',
