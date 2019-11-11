@@ -72,7 +72,7 @@ class ModelArrayValidator(ModelValidator):
         for modelField in modelFields:
             print('Validation of', modelField)
             results[modelField] = self.validate(data, trueField, modelField,
-                os.path.join(reportPath, modelField + '.html')
+                os.path.join(reportPath, modelField + '.html') if reportPath else None
             )
             print()
         return results
@@ -158,7 +158,7 @@ class ModelMultiscaleValidator(BaseValidator):
             cur.execute(qry)
             return cur.fetchone()[0]
 
-    def getGridDimensions(self, **kwargs):
+    def getGridOffset(self, **kwargs):
         with self._connect() as cur:
             qry = sql.SQL('''SELECT
                     min(ST_XMin(geometry)) as xoffset,

@@ -130,7 +130,7 @@ class Model:
 
 
 class ModelTrainer(field.Handler):
-    def main(self, modeltype, targetTable, outpath, seed=None, fraction=1, feature_regex=None, overwrite=False, condition=True, **kwargs):
+    def main(self, modeltype, targetTable, outpath, seed=None, fraction=1, feature_regex=None, invert_regex=False, overwrite=False, condition=True, **kwargs):
         if os.path.isfile(outpath) and not overwrite:
             raise IOError('model file {} already exists'.format(outpath))
         if seed is not None:
@@ -138,7 +138,7 @@ class ModelTrainer(field.Handler):
         model = Model(modeltype, **kwargs)
         model.setTargetName(targetTable[4:])
         with self._connect() as cur:
-            featureNames = self.getTrainingFeatureNames(cur, feature_regex)
+            featureNames = self.getTrainingFeatureNames(cur, feature_regex, invert_regex)
             if not featureNames:
                 raise ValueError('no features found')
             model.setFeatureNames(featureNames)
@@ -151,11 +151,15 @@ class ModelTrainer(field.Handler):
             with open(outpath, 'wb') as outfile:
                 model.save(outfile)
 
-    def getTrainingFeatureNames(self, cur, regex):
+    def getTrainingFeatureNames(self, cur, regex, invert=False):
         all_feats = self.getConsolidatedFeatureNames(cur)
         if regex:
             pattern = re.compile(regex)
-            return [feat for feat in all_feats if pattern.fullmatch(feat)]
+            if invert:
+                checker = lambda fn: not pattern.fullmatch(fn)
+            else:
+                checker = lambda fn: pattern.fullmatch(fn)
+            return [feat for feat in all_feats if checker(feat)]
         else:
             return all_feats
 
@@ -266,13 +270,13 @@ class ModelApplier(field.Handler):
 
 
 class ModelArrayApplier(ModelApplier):
-    def main(self, modelDirPath, weightTable, modelNames=None, featuresDiffer=False, overwrite=False, condition=True):
+    def main(self, modelDirPath, weightTable, modelNames=None, featuresDiffer=False, overwrite=False, condition=True, useModelFileNames=False):
         with self._connect() as cur:
-            models = list(self.loadModels(modelDirPath))
-            if not modelNames:
-                modelNames = [model.typename for model in models]
-                if len(frozenset(modelNames)) < len(models):
-                    raise ValueError('could not identify model names from types, need explicit names')
+            models, modelNames = self.loadAndNameModels(
+                modelDirPath,
+                modelNames=modelNames,
+                useFileNames=useModelFileNames
+            )
             if not featuresDiffer:
                 self.logger.info('selecting features')
                 features, ids = self.selectFeaturesAndIds(cur, models[0].getFeatureNames(), condition=condition)
@@ -293,20 +297,20 @@ class ModelArrayApplier(ModelApplier):
                 cur, weightTable, weightFields, weightValues, overwrite=overwrite
             )
 
-    # def getModelNames(self, models):
-        # typenames =
-        # if len(frozenset(typenames)) < len(models):
-            # featprefixes = [os.path.commonprefix(model.getFeatureNames()) for model in models]
-            # print(featprefixes)
-            # if '' in featprefixes or len(frozenset(featprefixes)) < len(models):
-                # self.logger.warn('model naming not found, inferring numbers')
-                # return ['model_' + str(i) for i in range(1, len(models)+1)]
-            # else:
-                # self.logger.info('model names inferred: %s', ', '.join(featprefixes))
-                # raise NotImplementedError
-                # return featprefixes
-        # else:
-            # return typenames
+    def loadAndNameModels(self, path, modelNames=None, useFileNames=False):
+        models = []
+        names = []
+        for name, mod in self.loadModels(path):
+            models.append(mod)
+            if useFileNames:
+                names.append(name)
+            elif modelNames is None:
+                names.append(mod.typename)
+            else:
+                names.append(modelNames[len(names)])
+        if len(frozenset(names)) < len(models):
+            raise ValueError('could not identify model names from types, need explicit names')
+        return models, names
 
     def saveMultipleWeights(self, cur, table, fields, values, overwrite=False):
         self.clearTable(cur, table, overwrite)
@@ -335,7 +339,10 @@ class ModelArrayApplier(ModelApplier):
         self.logger.info('loading models from %s', path)
         for fileName in sorted(os.listdir(path)):
             try:
-                yield Model.load(os.path.join(path, fileName))
+                yield (
+                    os.path.splitext(fileName)[0],
+                    Model.load(os.path.join(path, fileName))
+                )
             except pickle.UnpicklingError:
                 pass
 

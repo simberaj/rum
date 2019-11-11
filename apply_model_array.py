@@ -12,6 +12,9 @@ argparser.add_argument('-D', '--features-differ', action='store_true',
 argparser.add_argument('-C', '--no-condition', action='store_true',
     help='do not use modeling condition even if present'
 )
+argparser.add_argument('-f', '--use-filenames', action='store_true',
+    help='use model file names to name the models and their outputs'
+)
 argparser.add_argument('-n', '--names', nargs='+',
     help='names for the models and their outputs (fields in weight table)'
 )
@@ -28,4 +31,5 @@ if __name__ == '__main__':
         featuresDiffer=args.features_differ,
         overwrite=args.overwrite,
         condition=(not args.no_condition),
+        useModelFileNames=args.use_filenames,
     )

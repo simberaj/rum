@@ -27,6 +27,9 @@ argparser.add_argument('-C', '--no-condition', action='store_true',
 argparser.add_argument('-r', '--feat-regex',
     help='regular expression selecting only some consolidated features for training'
 )
+argparser.add_argument('-R', '--invert-regex', action='store_true',
+    help='regular expression excludes features'
+)
 argparser.add_argument('-s', '--seed', type=int, 
     help='seed for random generator (initializes the models and sample selection)'
 )
@@ -40,6 +43,7 @@ if __name__ == '__main__':
         args.model_type, args.target_table, args.file,
         fraction=args.fraction,
         feature_regex=args.feat_regex,
+        invert_regex=args.invert_regex,
         seed=args.seed,
         overwrite=args.overwrite,
         condition=(not args.no_condition),

@@ -1,7 +1,7 @@
 import rum
 import rum.model
 
-DESCRIPTION = '''Predicts disaggregation weights for the grid using a trained a model.'''
+DESCRIPTION = '''Predicts disaggregation weights for the grid using a trained model.'''
 
 argparser = rum.defaultArgumentParser(DESCRIPTION)
 argparser.add_argument('model_path', help='path to the model file')

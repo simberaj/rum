@@ -1,3 +1,4 @@
+config/dbconn.json
 data/*
 models/*
 validation/*

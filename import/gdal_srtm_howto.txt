@@ -1,0 +1,9 @@
+gdal_merge -o c:\temp\maribor.tif c:\data\Geodata\shape\dp\srtm\maribor1_n46_e015_1arc_v3.tif c:\data\Geodata\shape\dp\srtm\maribor2_n46_e016_1arc_v3.tif
+
+gdalwarp -overwrite -dstnodata -9999 -s_srs EPSG:4326 -t_srs EPSG:3912 -tr 30 30 -r lanczos c:\data\Geodata\shape\dp\srtm\maribor.tif c:\data\Geodata\shape\dp\srtm\maribor_siproj2.tif
+
+gdaldem slope c:\data\Geodata\shape\dp\srtm\maribor_siproj2.tif c:\data\Geodata\shape\dp\srtm\maribor_slope.tif -compute_edges
+
+rem do the same for aspect
+
+gdal_merge c:\data\Geodata\shape\dp\srtm\tallinn_slope.tif c:\data\Geodata\shape\dp\srtm\tallinn_aspect.tif -o c:\data\Geodata\shape\dp\srtm\tallinn.tif -separate
