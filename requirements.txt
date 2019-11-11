@@ -1,0 +1,9 @@
+numpy
+fiona
+psycopg2
+pandas
+shapely
+rasterio
+scikit-learn
+scipy
+matplotlib
