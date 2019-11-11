@@ -1,31 +1,6 @@
 {
     "tasks" : [
         {
-            "table" : "urbanatlas",
-            "method" : "cov",
-            "case" : "lucat"
-        },
-        {
-            "table" : "building",
-            "method" : "cov"
-        },
-        {
-            "table" : "building",
-            "method" : "wavg",
-            "source" : [
-                "perim_index",
-                "fullness_index",
-                "depth_index",
-                "concavity_index",
-                "detour_index"
-            ]
-        },
-        {
-            "table" : "building",
-            "method" : "avg",
-            "source" : "area"
-        },
-        {
             "table" : "building_diss",
             "method" : "wavg",
             "source" : [
@@ -40,11 +15,6 @@
             "table" : "building_diss",
             "method" : "avg",
             "source" : "area"
-        },
-        {
-            "table" : "buildheight",
-            "method" : "wavg",
-            "source" : "band_1"
         },
         {
             "table" : "transport",

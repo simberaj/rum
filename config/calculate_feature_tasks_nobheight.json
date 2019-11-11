@@ -42,11 +42,6 @@
             "source" : "area"
         },
         {
-            "table" : "buildheight",
-            "method" : "wavg",
-            "source" : "band_1"
-        },
-        {
             "table" : "transport",
             "method" : "len",
             "case" : "class"
