@@ -1,0 +1,6 @@
+python train_model.py tallinn rfor tgt_eegrid -s 42 -r "(building(?!_dis{2}).*)|(poi.*)|(srtm.*)|(transport.*)|(urbanatlas.*)" models\for_maribor_tal\nobuildingdiss.rum
+python train_model.py tallinn rfor tgt_eegrid -s 42 -r "(building_diss.*)|(poi.*)|(srtm.*)|(transport.*)|(urbanatlas.*)" models\for_maribor_tal\nobuildingdis2.rum
+python train_model.py tallinn rfor tgt_eegrid -s 42 -r "(building_diss.*)|(building(?!_dis{2}).*)|(srtm.*)|(transport.*)|(urbanatlas.*)" models\for_maribor_tal\nopoi.rum
+python train_model.py tallinn rfor tgt_eegrid -s 42 -r "(building_diss.*)|(building(?!_dis{2}).*)|(poi.*)|(transport.*)|(urbanatlas.*)" models\for_maribor_tal\nosrtm.rum
+python train_model.py tallinn rfor tgt_eegrid -s 42 -r "(building_diss.*)|(building(?!_dis{2}).*)|(poi.*)|(srtm.*)|(urbanatlas.*)" models\for_maribor_tal\notransport.rum
+python train_model.py tallinn rfor tgt_eegrid -s 42 -r "(building_diss.*)|(building(?!_dis{2}).*)|(poi.*)|(srtm.*)|(transport.*)" models\for_maribor_tal\nourbanatlas.rum
