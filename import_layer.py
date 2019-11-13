@@ -1,7 +1,4 @@
-import rum
-import rum.input
-
-DESCRIPTION = '''Imports a regular spatial data file into PostGIS/RUM.
+'''Import a regular spatial data file into PostGIS/RUM.
 
 Opens any spatial data file readable through GDAL/OGR/Fiona and imports its
 contents into the specified schema. If an extent file is already present in
@@ -9,7 +6,10 @@ the schema and an import reprojection SRID is not given, reprojects the data
 into the extent CRS.
 '''
 
-argparser = rum.defaultArgumentParser(DESCRIPTION)
+import rum
+import rum.input
+
+argparser = rum.defaultArgumentParser(__doc__)
 argparser.add_argument('-r', '--target-srid', metavar='srid',
     help='SRID to be used in the imported table', type=int, default=0
 )

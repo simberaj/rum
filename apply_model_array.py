@@ -1,9 +1,9 @@
+'''Predict disaggregation weights for the grid using an array of trained models.'''
+
 import rum
 import rum.model
 
-DESCRIPTION = '''Predicts disaggregation weights for the grid using an array of trained models.'''
-
-argparser = rum.defaultArgumentParser(DESCRIPTION)
+argparser = rum.defaultArgumentParser(__doc__)
 argparser.add_argument('model_dir', help='directory with the model files')
 argparser.add_argument('weight_table', help='weight table to be computed')
 argparser.add_argument('-D', '--features-differ', action='store_true',

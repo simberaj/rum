@@ -1,7 +1,4 @@
-import rum
-import rum.input
-
-DESCRIPTION = '''Imports a GDAL-compatible raster.
+'''Import a GDAL-compatible raster as a table with polygon geometry.
 
 Opens any GDAL-compatible raster readable through rasterio and imports its
 contents into the specified schema. Multiband rasters result in more value
@@ -10,7 +7,10 @@ the schema and an import reprojection SRID is not given, reprojects the data
 into the extent CRS.
 '''
 
-argparser = rum.defaultArgumentParser(DESCRIPTION)
+import rum
+import rum.input
+
+argparser = rum.defaultArgumentParser(__doc__)
 argparser.add_argument('-r', '--target-srid', metavar='srid',
     help='SRID to be used in the imported table', type=int, default=0
 )

@@ -1,12 +1,12 @@
-import rum
+'''Create an extent table.
 
-DESCRIPTION = '''Creates a results grid.
-
-Creates a square grid of polygons with the defined cell size that cover the
-analysis extent as defined in the ``extent`` table of the analysis schema.
+Dissolves the geometries from the input table to obtain a table with a single
+row and column containing the (multi)polygon geometry of the modeling area.
 '''
 
-argparser = rum.defaultArgumentParser(DESCRIPTION)
+import rum
+
+argparser = rum.defaultArgumentParser(__doc__)
 argparser.add_argument('table', help='table whose geometry defines the extent')
 argparser.add_argument('-o', '--overwrite', action='store_true',
     help='overwrite existing extent'

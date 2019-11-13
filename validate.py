@@ -1,9 +1,9 @@
+'''Validate the results of a disaggregation.'''
+
 import rum
 import rum.validate
 
-DESCRIPTION = '''Validates the results of a disaggregation.'''
-
-argparser = rum.defaultArgumentParser(DESCRIPTION)
+argparser = rum.defaultArgumentParser(__doc__)
 argparser.add_argument('true_table', help='table containing the true values')
 argparser.add_argument('model_table', help='table containing the modeled/disaggregated values')
 argparser.add_argument('-t', '--true-field', help='model value field', default='target')

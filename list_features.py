@@ -1,9 +1,9 @@
+'''List the already computed features in the given schema.'''
+
 import rum
 import rum.util
 
-DESCRIPTION = '''Lists the already computed features in the given schema.'''
-
-argparser = rum.defaultArgumentParser(DESCRIPTION)
+argparser = rum.defaultArgumentParser(__doc__)
 argparser.add_argument('-c', '--consolidated', action='store_true',
     help='list consolidated features'
 )

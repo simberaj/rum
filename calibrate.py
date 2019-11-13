@@ -1,9 +1,9 @@
+'''Calibrate values to given target values minimizing MAE.'''
+
 import rum
 import rum.model
 
-DESCRIPTION = '''Calibrates values to a given target minimizing MAE.'''
-
-argparser = rum.defaultArgumentParser(DESCRIPTION)
+argparser = rum.defaultArgumentParser(__doc__)
 argparser.add_argument('table',
     help='table with values to calibrate')
 argparser.add_argument('id_field', help='unique identifier of row')

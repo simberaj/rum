@@ -1,13 +1,13 @@
-import rum
-import rum.input
-
-DESCRIPTION = '''Imports an OSM file into PostGIS/RUM.
+'''Import an OSM file into PostGIS/RUM.
 
 Parses an OSM file and creates several layers in the defined RUM analysis
 schema. Uses a temporary SQLite database to resolve geometries.
 '''
 
-argparser = rum.defaultArgumentParser(DESCRIPTION)
+import rum
+import rum.input
+
+argparser = rum.defaultArgumentParser(__doc__)
 argparser.add_argument('-t', '--transform-conf', metavar='conffile',
     help='OSM transformation configuration file', type=int, default=None
 )
@@ -29,10 +29,6 @@ argparser.add_argument('-o', '--overwrite', action='store_true',
 argparser.add_argument('osmfile', help='path to OSM file')
 
 if __name__ == '__main__':
-    # import sys
-    # parser = rum.input.OSMParser()
-    # for feature in parser.parse(sys.argv[1]):
-        # print(feature)
     args = argparser.parse_args()
     rum.input.OSMImporter.fromConfig(
         args.dbconf, args.transform_conf, args.schema

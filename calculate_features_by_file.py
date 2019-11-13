@@ -1,15 +1,15 @@
-import json
-
-import rum
-import rum.calculate
-
-DESCRIPTION = '''Calculates features for the grid using a file with task config.
+'''Calculate features for the grid using a file with task config.
 
 Loads a JSON file with configurations of tasks to perform and pass to the
 calculate_features script interface.
 '''
 
-argparser = rum.defaultArgumentParser(DESCRIPTION)
+import json
+
+import rum
+import rum.calculate
+
+argparser = rum.defaultArgumentParser(__doc__)
 argparser.add_argument('taskfile', help='task definition file')
 argparser.add_argument('-o', '--overwrite', action='store_true',
     help='overwrite existing attributes'

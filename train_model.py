@@ -1,7 +1,4 @@
-import rum
-import rum.model
-
-DESCRIPTION = '''Trains a predictive model for disaggregation weights.
+'''Train a predictive model for disaggregation weights.
 
 Takes the fields from the consolidated feature table (all_feats) as features
 and the "target" field from a selected target table as the target, joining
@@ -11,10 +8,13 @@ The following model types are available:
 
 '''
 
-for name, cls in rum.model.Model.TYPES.items():
-    DESCRIPTION += '- {name}: {cls}\n'.format(name=name, cls=cls.__name__)
+import rum
+import rum.model
 
-argparser = rum.defaultArgumentParser(DESCRIPTION)
+for name, cls in rum.model.Model.TYPES.items():
+    __doc__ += '- {name}: {cls}\n'.format(name=name, cls=cls.__name__)
+
+argparser = rum.defaultArgumentParser(__doc__)
 argparser.add_argument('model_type', help='model type as listed above')
 argparser.add_argument('target_table', help='table with target field for modeling')
 argparser.add_argument('file', help='file to save the trained model to')

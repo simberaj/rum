@@ -1,13 +1,13 @@
-import rum
-import rum.input
-
-DESCRIPTION = '''Imports a CSV file into PostGIS/RUM.
+'''Import a CSV file into PostGIS/RUM.
 
 Autodetects delimiters, field names and types (either from an associated CSVT
 file or the first rows of the file).
 '''
 
-argparser = rum.defaultArgumentParser(DESCRIPTION)
+import rum
+import rum.input
+
+argparser = rum.defaultArgumentParser(__doc__)
 argparser.add_argument('-o', '--overwrite', action='store_true',
     help='overwrite existing table'
 )

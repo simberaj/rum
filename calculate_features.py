@@ -1,7 +1,4 @@
-import rum
-import rum.calculate
-
-DESCRIPTION = '''Calculates features for the grid from other source data.
+'''Calculate features for the grid from other source data.
 
 Chooses an appropriate calculator for the method given and creates new column(s)
 in the grid table.
@@ -18,7 +15,10 @@ The following methods are available:
 - wavg: average value of given field in grid cell, weighted by feature area
 '''
 
-argparser = rum.defaultArgumentParser(DESCRIPTION)
+import rum
+import rum.calculate
+
+argparser = rum.defaultArgumentParser(__doc__)
 argparser.add_argument('table', help='calculation source table name')
 argparser.add_argument('method', nargs='+', help='calculation method')
 argparser.add_argument('-s', '--source-field', metavar='name', nargs='+',

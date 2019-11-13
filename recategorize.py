@@ -1,13 +1,13 @@
-import rum
-import rum.util
-
-DESCRIPTION = '''Recategorizes a categorical attribute.
+'''Recategorize a categorical attribute.
 
 Given a column in a defined schema table, creates its copy with values
 recategorized using given translation rules.
 '''
 
-argparser = rum.defaultArgumentParser(DESCRIPTION)
+import rum
+import rum.util
+
+argparser = rum.defaultArgumentParser(__doc__)
 argparser.add_argument('table', help='table containing the attribute')
 argparser.add_argument('source', help='the attribute column to be recategorized')
 argparser.add_argument('target', help='the column to create and put the result in')

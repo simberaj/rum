@@ -1,12 +1,12 @@
-import rum
-import rum.calculate
-
-DESCRIPTION = '''Calculates training values for the grid from other source data.
+'''Calculate training values for the grid from other source data.
 
 Chooses an appropriate calculator based on the geometry type of the input table.
 '''
 
-argparser = rum.defaultArgumentParser(DESCRIPTION)
+import rum
+import rum.calculate
+
+argparser = rum.defaultArgumentParser(__doc__)
 argparser.add_argument('table', help='calculation source table name')
 argparser.add_argument('source_field', help='source value field for target')
 argparser.add_argument('-n', '--output-name',

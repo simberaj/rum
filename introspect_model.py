@@ -1,10 +1,10 @@
+'''Introspect a trained model for its feature information.'''
+
 import argparse
 
 import rum.model
 
-DESCRIPTION = '''Introspects a trained model for its feature information.'''
-
-argparser = argparse.ArgumentParser(DESCRIPTION)
+argparser = rum.defaultArgumentParser(__doc__)
 argparser.add_argument('model_file', help='pickled model file')
 argparser.add_argument('-g', '--grouped', action='store_true',
     help=('display information for feature groups as specified by common'

@@ -1,10 +1,9 @@
+'''Disaggregate values from a layer using a given weight table to the grid.'''
+
 import rum
 import rum.util
 
-DESCRIPTION = '''Disaggregates values from a layer using a given weight table
-to the grid.'''
-
-argparser = rum.defaultArgumentParser(DESCRIPTION)
+argparser = rum.defaultArgumentParser(__doc__)
 argparser.add_argument('disag_table',
     help='table with polygon geometry and values to disaggregate')
 argparser.add_argument('disag_field', help='field in disag_table to disaggregate')

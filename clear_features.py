@@ -1,9 +1,9 @@
+'''Drop all existing feature tables in the given schema.'''
+
 import rum
 import rum.util
 
-DESCRIPTION = '''Drops all existing feature tables in the given schema.'''
-
-argparser = rum.defaultArgumentParser(DESCRIPTION)
+argparser = rum.defaultArgumentParser(__doc__)
 
 if __name__ == '__main__':
     args = argparser.parse_args()

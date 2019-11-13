@@ -1,7 +1,4 @@
-import rum
-import rum.input
-
-DESCRIPTION = '''Imports mutiple regular spatial data files into PostGIS/RUM.
+'''Imports mutiple regular spatial data files into PostGIS/RUM.
 
 Opens an assorted set of spatial data files readable through GDAL/OGR/Fiona and
 imports their contents into a single table in the specified schema. Also merges
@@ -13,7 +10,10 @@ the schema and an import reprojection SRID is not given, reprojects the data
 into the extent CRS.
 '''
 
-argparser = rum.defaultArgumentParser(DESCRIPTION)
+import rum
+import rum.input
+
+argparser = rum.defaultArgumentParser(__doc__)
 argparser.add_argument('-r', '--target-srid', metavar='srid',
     help='SRID to be used in the imported table', type=int, default=0
 )

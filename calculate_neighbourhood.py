@@ -1,9 +1,9 @@
+'''Calculate neighbourhood features by Gaussian averaging.'''
+
 import rum
 import rum.calculate
 
-DESCRIPTION = '''Calculate neighbourhood features by Gaussian averaging.'''
-
-argparser = rum.defaultArgumentParser(DESCRIPTION)
+argparser = rum.defaultArgumentParser(__doc__)
 argparser.add_argument('multipliers', metavar='multiplier', type=float, nargs='+',
     help='blurring standard deviations as multiples of grid cell size')
 argparser.add_argument('-o', '--overwrite', action='store_true',
