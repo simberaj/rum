@@ -137,6 +137,7 @@ A typical workflow for disaggregation would be along these lines
 -   `init.py` to create and initialize the schema
 -   `import_layer.py` to import a land cover shapefile (Urban Atlas)
 -   `create_extent.py` to create an extent polygon based on the land cover area
+-   `create_grid.py` to create a grid to disaggregate to
 -   `recategorize.py` to aggregate the land cover classes into a less granular
     classification to ease the modeling
 -   `import_osm.py` to import OSM data for the area
