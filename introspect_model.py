@@ -4,7 +4,7 @@ import argparse
 
 import rum.model
 
-argparser = rum.defaultArgumentParser(__doc__)
+argparser = rum.defaultArgumentParser(__doc__, schema=False)
 argparser.add_argument('model_file', help='pickled model file')
 argparser.add_argument('-g', '--grouped', action='store_true',
     help=('display information for feature groups as specified by common'
