@@ -425,7 +425,7 @@ class ModelIntrospector(core.Task):
         df['transformed'] = df.value.map(transformer) if transformer else df.value
         df.sort_values('transformed', ascending=False, inplace=True)
         self.display(df, 'feature', ['value'],
-                     'Model {} ({} features)'.format(label, len(df.index)),
+                     'Model {} ({} features)'.format(label, len(df.index) - 1),
                      formatter
         )
         if add_grouped:

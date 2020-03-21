@@ -125,18 +125,20 @@ class Calculator(field.Handler):
 
             
 class ConditionCalculator(Calculator):
-    def main(self, table, expression, overwrite=False):
+    def main(self, table, expression=None, overwrite=False):
         partials = [('*',
             sql.SQL('{schema}.{table}.*').format(
                 schema=self.schemaSQL,
                 table=sql.Identifier(table)
             )
         )]
-        finals = [('condition',
-            sql.SQL('sum(CASE WHEN {expr} THEN 1 ELSE 0 END) > 0').format(
+        if expression is not None:
+            expr_part = sql.SQL('sum(CASE WHEN {expr} THEN 1 ELSE 0 END) > 0').format(
                 expr=sql.SQL(expression) # TODO any way to sanitize expression?
             )
-        )]
+        else:
+            expr_part = sql.SQL('sum(1) > 0')
+        finals = [('condition', expr_part)]
         with self._connect() as cur:
             self.calculate(cur, table,
                 partials, finals,
