@@ -63,7 +63,7 @@ class ShapeCalculator(core.DatabaseTask):
                     qry = sql.SQL(pattern).format(**params).as_string(cur)
                     cur.execute(qry)
 
-                    
+
 class Dissolver(core.DatabaseTask):
     QRY = sql.SQL('''CREATE TABLE {schema}.{tgt} AS SELECT
         st_multi(
@@ -83,8 +83,8 @@ class Dissolver(core.DatabaseTask):
             self.clearTable(cur, target_table, overwrite=overwrite)
             self.logger.debug('dissolving %s to %s: %s', source_table, target_table, qry)
             cur.execute(qry)
-            
-                    
+
+
 class FeatureLister(core.DatabaseTask):
     def main(self, consolidated=False):
         hasCondition = False
@@ -149,7 +149,7 @@ class FeatureConsolidator(core.DatabaseTask):
             if not hasCondition:
                 self.createDefaultConditionField(cur)
             self.createPrimaryKey(cur, 'all_feats')
-    
+
     def createDefaultConditionField(self, cur):
         qry = sql.SQL('''ALTER TABLE {schema}.all_feats
             ADD COLUMN condition boolean NOT NULL DEFAULT TRUE;'''
@@ -251,7 +251,7 @@ class RawDisaggregator(core.DatabaseTask):
         FROM grouped g
             LEFT JOIN {schema}.{weightTable} w ON g.geometry=w.geometry
     )''')
-    
+
     namePatterns = {
         'source' : '{source}',
         'weight' : '{weight}',
@@ -266,13 +266,13 @@ class RawDisaggregator(core.DatabaseTask):
             WHEN t.{weight} IS NULL THEN 0
             ELSE t.{weight}
         END AS {partweight}'''),
-        'tcoef' :      sql.SQL('''max({partsource}) / CASE 
+        'tcoef' :      sql.SQL('''max({partsource}) / CASE
             WHEN sum({partweight} * part_area_fraction) = 0 THEN count(*)
             ELSE sum({partweight} * part_area_fraction)
         END AS {result}'''),
         'result' :     sql.SQL('''sum(p.{partweight} * p.part_area_fraction * t.{result}) AS {result}'''),
     }
-    
+
     def main(self, disagTable, disagFields, outputTable, weightTable, weightFields, keepUnweighted=False, relative=False, overwrite=False):
         if relative:
             raise NotImplementedError
@@ -427,8 +427,97 @@ class BatchDisaggregator(Disaggregator):
             cur.execute(qry)
             self.createPrimaryKey(cur, outputTable)
 
-            
-            
+class TransferWeightCalculator(core.DatabaseTask):
+    pattern = sql.SQL('''CREATE TABLE {schema}.{outputTable} AS (
+        WITH chunks AS (
+        SELECT f.{fromIDField} AS from_id,
+               t.{toIDField} AS to_id,
+               st_area(st_intersection(
+                   st_intersection(g.geometry, f.geometry),
+                   t.geometry
+               )) * {auxValueSource}.{auxDensField} AS weight
+          FROM {schema}.{fromTable} f
+               JOIN {schema}.{auxTable} g ON st_intersects(g.geometry, f.geometry)
+               {auxValueClause}
+               JOIN {schema}.{toTable} t ON st_intersects(g.geometry, t.geometry)
+         WHERE {auxValueSource}.{auxDensField} > 0
+        ),
+        source_sums AS (
+        SELECT a.from_id,
+               sum(a.weight) AS site_weight_sum
+          FROM chunks a
+         GROUP BY a.from_id
+        )
+        SELECT a.from_id,
+               a.to_id,
+               sum(a.weight) / s.site_weight_sum as transfer_weight
+          FROM chunks a
+               join source_sums s ON a.from_id=s.from_id
+         GROUP BY a.from_id, a.to_id, s.site_weight_sum
+        HAVING sum(a.weight) > 0
+    )''')
+    auxValueClausePattern = sql.SQL('''
+        JOIN {schema}.{auxValueTable} d ON g.{auxGeomIDField}=d.{auxValueIDField}
+    ''')
+
+    def main(self, fromTable, fromIDField, toTable, toIDField, auxTable, outputTable, auxDensField='weight', auxValueTable=None, auxGeomIDField='geohash', auxValueIDField='geohash', overwrite=False):
+        with self._connect() as cur:
+            self.clearTable(cur, outputTable, overwrite=overwrite)
+            disagQry = self.pattern.format(
+                schema=self.schemaSQL,
+                fromTable=sql.Identifier(fromTable),
+                toTable=sql.Identifier(toTable),
+                fromIDField=sql.Identifier(fromIDField),
+                toIDField=sql.Identifier(toIDField),
+                auxDensField=sql.Identifier(auxDensField),
+                auxTable=sql.Identifier(auxTable),
+                outputTable=sql.Identifier(outputTable),
+                auxValueClause=(
+                    self.auxValueClausePattern.format(
+                        schema=self.schemaSQL,
+                        auxValueTable=sql.Identifier(auxValueTable),
+                        auxGeomIDField=sql.Identifier(auxGeomIDField),
+                        auxValueIDField=sql.Identifier(auxValueIDField),
+                    ) if auxValueTable else sql.SQL('')
+                ),
+                auxValueSource=(sql.SQL('d' if auxValueTable else 'g')),
+            ).as_string(cur)
+            self.logger.debug('creating transfer table: %s', disagQry)
+            cur.execute(disagQry)
+
+
+class TransferWeightApplier(core.DatabaseTask):
+    pattern = sql.SQL('''CREATE TABLE {schema}.{outputTable} AS (
+        SELECT {targetFields},
+               sum(f.{valueField} * w.transfer_weight) AS {valueField}
+          FROM eesti.{fromTable} f
+               join eesti.{transferTable} w ON f.{fromIDField}=w.from_id
+               join eesti.{toTable} t ON t.{toIDField}=w.to_id
+         GROUP BY {targetFields}
+    )''')
+
+    def main(self, fromTable, fromIDField, valueField, toTable, toIDField, transferTable, outputTable, overwrite=False):
+        with self._connect() as cur:
+            toFields = self.getColumnNamesForTable(cur, toTable, schema=self.schema)
+            self.clearTable(cur, outputTable, overwrite=overwrite)
+            qry = self.pattern.format(
+                schema=self.schemaSQL,
+                fromTable=sql.Identifier(fromTable),
+                toTable=sql.Identifier(toTable),
+                fromIDField=sql.Identifier(fromIDField),
+                valueField=sql.Identifier(valueField),
+                toIDField=sql.Identifier(toIDField),
+                transferTable=sql.Identifier(transferTable),
+                outputTable=sql.Identifier(outputTable),
+                targetFields=sql.SQL(', ').join(
+                    sql.SQL('t.{}').format(sql.Identifier(fld))
+                    for fld in toFields
+                ),
+            ).as_string(cur)
+            self.logger.debug('transferring: %s', qry)
+            cur.execute(qry)
+
+
 class TrainingSchemaMerger(core.DatabaseTask):
     TARGET_TABLE = 'target'
 
@@ -456,7 +545,7 @@ class TrainingSchemaMerger(core.DatabaseTask):
                 doPrimaryKey=True,
                 overwrite=overwrite,
             )
-        
+
     def mergeAllFeaturesTables(self, cur, source_schemas, overwrite=False):
         self.clearTable(cur, core.ALL_FEATS_TABLE, overwrite=overwrite)
         self.logger.info('merging feature tables')
@@ -493,7 +582,7 @@ class TrainingSchemaMerger(core.DatabaseTask):
         self.logger.debug('merging feature table query: %s', qry)
         cur.execute(qry)
         self.createPrimaryKey(cur, core.ALL_FEATS_TABLE)
-        
+
     def mergeTables(self, cur, source_schemas, source_tables, target_table, fields, doPrimaryKey=False, overwrite=False):
         if isinstance(source_tables, str):
             source_tables = [source_tables] * len(source_schemas)
@@ -518,5 +607,4 @@ class TrainingSchemaMerger(core.DatabaseTask):
         cur.execute(qry)
         if doPrimaryKey:
             self.createPrimaryKey(cur, target_table)
-        
-        
+
