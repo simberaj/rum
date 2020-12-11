@@ -11,8 +11,8 @@ from . import field
 PARTIAL_EXPRESSIONS = {
     'aux_item_length' : 'ST_Length({schema}.{table}.geometry)',
     'aux_item_area' : 'ST_Area({schema}.{table}.geometry)',
-    'aux_common_length' : 'ST_Length(ST_Intersection({schema}.grid.geometry, {schema}.{table}.geometry))',
-    'aux_common_area' : 'ST_Area(ST_Intersection({schema}.grid.geometry, {schema}.{table}.geometry))',
+    'aux_common_length' : 'ST_Length(ST_Intersection(ST_MakeValid(ST_SnapToGrid({schema}.grid.geometry,0.001)), ST_MakeValid(ST_SnapToGrid({schema}.{table}.geometry,0.001))))',
+    'aux_common_area' : 'ST_Area(ST_Intersection(ST_MakeValid(ST_SnapToGrid({schema}.grid.geometry,0.001)), ST_MakeValid(ST_SnapToGrid({schema}.{table}.geometry,0.001))))',
     'aux_cell_area' : 'ST_Area({schema}.grid.geometry)'
 }
 
@@ -90,7 +90,7 @@ class Calculator(field.Handler):
         cur.execute(qry)
         self.createPrimaryKey(cur, target)
         return target
-        
+
     def uniqueTableName(self, cur, target, names=[]):
         if names:
             currentNames = [name for name in names if target in name]
@@ -123,7 +123,7 @@ class Calculator(field.Handler):
                 )
             )
 
-            
+
 class ConditionCalculator(Calculator):
     def main(self, table, expression=None, overwrite=False):
         partials = [('*',
