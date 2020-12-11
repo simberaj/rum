@@ -112,6 +112,11 @@ class DatabaseTask(Task):
         with self.connector.connect(autocommit=autocommit) as cursor:
             yield cursor
 
+    @contextlib.contextmanager
+    def _connect_raw(self, autocommit=False):
+        with self.connector.connect_raw(autocommit=autocommit) as conn:
+            yield conn
+
     @classmethod
     def fromArgs(cls, args):
         return cls.fromConfig(
@@ -164,7 +169,7 @@ class DatabaseTask(Task):
         return self.getColumnNames(cur,
             where=sql.SQL("table_name LIKE 'feat_%' AND column_name<>'geohash'")
         )
-        
+
     def getSRID(self, cur, table, geomField=GEOMETRY_FIELD):
         qry = sql.SQL(
             "SELECT Find_SRID({schema}, {table}, {geomField});"
@@ -187,7 +192,7 @@ class DatabaseTask(Task):
             for col in self.getColumnNamesForTable(cur, 'all_feats')
             if col != 'geohash' and (condition or col != 'condition')
         ]
-        
+
     def createTable(self, cur, table, coldef, overwrite=False):
         # TODO accept field sizes in coldef
         if overwrite:
@@ -224,7 +229,7 @@ class DatabaseTask(Task):
         ).as_string(cur)
         self.logger.debug('creating primary key: %s', qry)
         cur.execute(qry)
-    
+
     def createSchema(self, cur):
         cur.execute(sql.SQL('CREATE SCHEMA IF NOT EXISTS {}')
             .format(self.schemaSQL).as_string(cur)
@@ -243,7 +248,7 @@ class Initializer(DatabaseTask):
                     cur.execute(query)
             self.createSchema(cur)
 
-            
+
 class ExtentMaker(DatabaseTask):
     def main(self, table, overwrite=False):
         with self._connect() as cur:
@@ -329,6 +334,11 @@ class Connector:
 
     @contextlib.contextmanager
     def connect(self, autocommit=False):
+        with self.connect_raw(autocommit=autocommit) as conn:
+            yield conn.cursor()
+
+    @contextlib.contextmanager
+    def connect_raw(self, autocommit=False):
         self.logger.debug('connecting to database %s', self.config.get('dbname'))
         self.connection = psycopg2.connect(**self.config)
         if autocommit:
@@ -336,7 +346,7 @@ class Connector:
         else:
             self.logger.debug('entering database transaction')
         try:
-            yield self.connection.cursor()
+            yield self.connection
         except:
             raise
         else:
