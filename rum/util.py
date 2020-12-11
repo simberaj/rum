@@ -36,6 +36,28 @@ class Recategorizer(core.DatabaseTask):
         cur.execute(qry)
 
 
+class PolygonGeometryFixer(core.DatabaseTask):
+    computeSQL = '''UPDATE {schema}.{table} SET geometry=(
+        case when substring(GeometryType(geometry) for 5) = 'MULTI'
+            then st_multi(st_buffer(geometry, 0))
+            else st_buffer(geometry, 0)
+        end
+    );'''
+    cleanSQL = 'VACUUM ANALYZE {schema}.{table};'
+
+    def main(self, table, overwrite=False):
+        params = dict(
+            schema=self.schemaSQL,
+            table=sql.Identifier(table),
+        )
+        for pattern in (self.computeSQL, ):#self.cleanSQL):
+            # todo fix: vacuum cannot run inside transaction
+            with self._connect() as cur:
+                qry = sql.SQL(pattern).format(**params).as_string(cur)
+                cur.execute(qry)
+
+
+
 class ShapeCalculator(core.DatabaseTask):
     fields = [
         ('area', 'ST_Area(geometry)'),
@@ -426,6 +448,7 @@ class BatchDisaggregator(Disaggregator):
             self.logger.debug('disaggregating batch: %s', qry)
             cur.execute(qry)
             self.createPrimaryKey(cur, outputTable)
+
 
 class TransferWeightCalculator(core.DatabaseTask):
     pattern = sql.SQL('''CREATE TABLE {schema}.{outputTable} AS (
