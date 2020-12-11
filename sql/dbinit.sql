@@ -1,3 +1,4 @@
+CREATE EXTENSION IF NOT EXISTS postgis;
 CREATE OR REPLACE FUNCTION makegrid(
     extent geometry,
     cellsize numeric,
