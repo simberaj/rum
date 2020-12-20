@@ -6,6 +6,7 @@ import re
 
 import numpy
 import scipy.optimize
+import matplotlib.pyplot as plt
 import psycopg2.extras
 from psycopg2 import sql
 import pandas as pd
@@ -15,6 +16,12 @@ import sklearn.neighbors
 import sklearn.ensemble
 import sklearn.neural_network
 import sklearn.preprocessing
+
+try:
+    import shap
+except ImportError:
+    shap = None
+
 
 from . import core, field
 
@@ -83,6 +90,7 @@ class Model:
         'knn' : {'n_neighbors' : 5},
         'svr' : {'gamma' : 'auto'},
     }
+    TREE_TYPES = {'rfor', 'extra', 'gboost'}
 
     def __init__(self, typename, **kwargs):
         self.type = self.TYPES[typename]
@@ -93,6 +101,9 @@ class Model:
         self.regressor = self.type(**params)
         self.featureNames = None
         self.targetName = None
+
+    def isTreeBased(self):
+        return self.typename in self.TREE_TYPES
 
     def setFeatureNames(self, names):
         self.featureNames = names
@@ -219,18 +230,7 @@ class ModelArrayTrainer(ModelTrainer):
                     model.save(outfile)
 
 
-class ModelApplier(field.Handler):
-    def main(self, modelPath, weightTable, overwrite=False, condition=True):
-        self.logger.info('loading models from %s', modelPath)
-        model = Model.load(modelPath)
-        with self._connect() as cur:
-            self.logger.info('selecting features')
-            features, ids = self.selectFeaturesAndIds(cur, model.getFeatureNames(), condition=condition)
-            self.logger.info('predicting weights')
-            weights = model.predict(features)
-            self.logger.info('saving weights')
-            self.saveWeights(cur, weightTable, ids, weights, overwrite=overwrite)
-
+class ModelHandler(field.Handler):
     def selectFeaturesAndIds(self, cur, featureNames, condition=True):
         currentNames = self.getConsolidatedFeatureNames(cur)
         missings = []
@@ -247,8 +247,21 @@ class ModelApplier(field.Handler):
         data.fillna(0, inplace=True)
         for name in missings:
             data[name] = 0
-        print(data[featureNames].values.shape, len(featureNames), len(currentNames))
+        self.logger.info('selected %d samples with %d features', *data[featureNames].values.shape)
         return data[featureNames].values, ids
+
+
+class ModelApplier(ModelHandler):
+    def main(self, modelPath, weightTable, overwrite=False, condition=True):
+        self.logger.info('loading models from %s', modelPath)
+        model = Model.load(modelPath)
+        with self._connect() as cur:
+            self.logger.info('selecting features')
+            features, ids = self.selectFeaturesAndIds(cur, model.getFeatureNames(), condition=condition)
+            self.logger.info('predicting weights')
+            weights = model.predict(features)
+            self.logger.info('saving weights')
+            self.saveWeights(cur, weightTable, ids, weights, overwrite=overwrite)
 
     def saveWeights(self, cur, weightTable, ids, weights, overwrite=False):
         params = {
@@ -451,3 +464,55 @@ class ModelIntrospector(core.Task):
                 for valname in valnames:
                     print(formatter.format(row[valname]), end=' ')
                 print()
+
+
+class SHAPGetter(ModelHandler):
+    def main(self, modelPath, folder, subsampleN=None, seed=None, condition=True):
+        if shap is None:
+            raise ImportError('need the shap package for SHAP value computation')
+        self.logger.info('loading model from %s', modelPath)
+        model = Model.load(modelPath)
+        featureNames = model.getFeatureNames()
+        with self._connect() as cur:
+            self.logger.info('selecting features')
+            features, _ = self.selectFeaturesAndIds(cur, featureNames, condition=condition)
+        if subsampleN:
+            self.logger.info('subsampling %d samples', subsampleN)
+            features = self.subsample(features, subsampleN, seed=seed)
+        explainer = self.getExplainer(model, features)
+        self.logger.info('computing SHAP values')
+        shapValues = explainer.shap_values(features)
+        shapKWArgs = dict(
+            shap_values=shapValues,
+            features=features,
+            feature_names=featureNames,
+            show=False,
+        )
+        if not os.path.isdir(folder):
+            self.logger.info(f'creating directory {folder}')
+            os.mkdir(folder)
+        self.logger.info('creating summary plots')
+        shap.summary_plot(**shapKWArgs)
+        plt.savefig(os.path.join(folder, 'summary.png'), bbox_inches='tight')
+        shap.summary_plot(plot_type='bar', color='#aaaaaa', **shapKWArgs)
+        plt.savefig(os.path.join(folder, 'importances.png'), bbox_inches='tight')
+        # non-js force plots not yet supported by shap
+        # self.logger.info('creating force plots')
+        # shap.force_plot(explainer.expected_value, **shapKWArgs, matplotlib=True)
+        # plt.savefig(os.path.join(folder, 'force_plot.png'))
+        self.logger.info('creating feature dependence plots')
+        for i, featureName in enumerate(featureNames):
+            shap.dependence_plot(i, **shapKWArgs, interaction_index=None)
+            plt.savefig(os.path.join(folder, f'{featureName}.png'), bbox_inches='tight')
+
+    def getExplainer(self, model, features):
+        if model.isTreeBased():
+            return shap.TreeExplainer(model.getRegressor())
+        else:
+            raise NotImplementedError('not implemented for non-tree models')
+
+    def subsample(self, features, n, seed=None):
+        if seed is not None:
+            numpy.random.seed(seed)
+        sels = numpy.random.rand(features.shape[0])
+        return features[numpy.argsort(sels)[:n],:]
